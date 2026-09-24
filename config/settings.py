@@ -146,6 +146,7 @@ MAILERS = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:5174',
+    'https://organizador-eventos-frontend-sigma.vercel.app/,
 ]
 
 REST_FRAMEWORK = {
