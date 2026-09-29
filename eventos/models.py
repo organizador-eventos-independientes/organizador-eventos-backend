@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -10,6 +11,15 @@ class Evento(models.Model):
     hora = models.TimeField()
     lugar = models.CharField(max_length=200)
     estado = models.CharField(max_length=20, default='Pendiente')
+    # Dueño del evento (US-11). Admite vacío solo por los eventos creados antes
+    # del login; la API siempre asigna el usuario autenticado.
+    organizador = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='eventos',
+        null=True,
+        blank=True
+    )
 
     def __str__(self):
         return self.titulo

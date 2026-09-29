@@ -65,6 +65,7 @@ class EventoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Evento
         fields = '__all__'
+        read_only_fields = ['organizador']
 
 
 class SubtareaSerializer(serializers.ModelSerializer):
@@ -102,9 +103,37 @@ class SubtareaSerializer(serializers.ModelSerializer):
             'evento': {'required': False}
         }
 
+    def get_fields(self):
+        fields = super().get_fields()
+        # Una gestión solo puede asociarse a eventos del organizador autenticado;
+        # el id de un evento ajeno se rechaza igual que uno inexistente.
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated:
+            fields['evento'].queryset = Evento.objects.filter(organizador=request.user)
+        return fields
+
     def validate_horas_estimadas(self, value):
         if value <= 0:
             raise serializers.ValidationError(
                 'Las horas estimadas deben ser mayores que 0.'
             )
         return value
+
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(
+        trim_whitespace=False,
+        style={'input_type': 'password'}
+    )
+
+
+class UsuarioSesionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    nombre = serializers.CharField()
+
+
+class LoginRespuestaSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    usuario = UsuarioSesionSerializer()

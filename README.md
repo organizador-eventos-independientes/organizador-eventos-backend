@@ -20,6 +20,7 @@ API REST desarrollada para gestionar eventos y sus gestiones logísticas dentro 
 * Actualizar y eliminar gestiones logísticas.
 * Validar los datos recibidos por la API.
 * Validar que las horas estimadas de una gestión sean mayores que 0.
+* Iniciar y cerrar sesión con usuario y contraseña (US-11); cada organizador solo ve sus propios eventos y gestiones.
 * Persistir la información en PostgreSQL.
 * Documentar la API mediante Swagger/OpenAPI.
 
@@ -62,6 +63,12 @@ Aplicar las migraciones:
 python manage.py migrate
 ```
 
+Crear la cuenta de un organizador (no hay registro público; también se pueden crear desde `/admin/`):
+
+```powershell
+python manage.py createsuperuser
+```
+
 ## Ejecución
 
 Iniciar el servidor de desarrollo:
@@ -79,6 +86,17 @@ http://127.0.0.1:8000/
 ## API
 
 Los principales recursos disponibles son:
+
+### Autenticación (US-11)
+
+```text
+POST   /api/auth/login/     { username, password } -> { token, usuario: { id, username, nombre } }
+POST   /api/auth/logout/    invalida el token actual
+```
+
+El resto de la API exige la cabecera `Authorization: Token <token>`; sin ella responde `401`. Cada organizador solo ve y modifica sus propios eventos y gestiones: los de otro responden `404`, como si no existieran. Si el usuario o la contraseña no son correctos, el login responde `400` con `{ "detail": "Credenciales inválidas." }`, sin indicar cuál de los dos falló.
+
+Los eventos creados antes de esta versión no tienen organizador y no aparecen para nadie. Para recuperarlos hay que asignarles un organizador desde `/admin/` (Eventos → campo *Organizador*).
 
 ### Eventos
 
