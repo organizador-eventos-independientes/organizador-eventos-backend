@@ -20,7 +20,7 @@ API REST desarrollada para gestionar eventos y sus gestiones logísticas dentro 
 * Actualizar y eliminar gestiones logísticas.
 * Validar los datos recibidos por la API.
 * Validar que las horas estimadas de una gestión sean mayores que 0.
-* Iniciar y cerrar sesión con usuario y contraseña (US-11); cada organizador solo ve sus propios eventos y gestiones.
+* Registrarse, iniciar y cerrar sesión con usuario y contraseña (US-11); cada organizador solo ve sus propios eventos y gestiones.
 * Persistir la información en PostgreSQL.
 * Documentar la API mediante Swagger/OpenAPI.
 
@@ -63,7 +63,7 @@ Aplicar las migraciones:
 python manage.py migrate
 ```
 
-Crear la cuenta de un organizador (no hay registro público; también se pueden crear desde `/admin/`):
+Los organizadores crean su cuenta desde el registro del frontend (`/registro`). Para entrar a `/admin/` hace falta un superusuario:
 
 ```powershell
 python manage.py createsuperuser
@@ -90,9 +90,12 @@ Los principales recursos disponibles son:
 ### Autenticación (US-11)
 
 ```text
+POST   /api/auth/registro/  { nombre, username, password } -> 201 { token, usuario: { id, username, nombre } }
 POST   /api/auth/login/     { username, password } -> { token, usuario: { id, username, nombre } }
 POST   /api/auth/logout/    invalida el token actual
 ```
+
+El registro guarda el usuario en la tabla de usuarios de Django (`auth_user`), con la contraseña cifrada, y deja la sesión iniciada. Responde `400` con `{ campo: ["mensaje"] }` si falta un dato, si el usuario ya existe (sin distinguir mayúsculas) o si la contraseña no cumple las reglas de `AUTH_PASSWORD_VALIDATORS`: mínimo 8 caracteres, no muy común, no solo números y no parecida al usuario o al nombre.
 
 El resto de la API exige la cabecera `Authorization: Token <token>`; sin ella responde `401`. Cada organizador solo ve y modifica sus propios eventos y gestiones: los de otro responden `404`, como si no existieran. Si el usuario o la contraseña no son correctos, el login responde `400` con `{ "detail": "Credenciales inválidas." }`, sin indicar cuál de los dos falló.
 

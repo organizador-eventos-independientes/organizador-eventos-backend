@@ -61,6 +61,57 @@ class LoginTests(APITestCase):
         self.assertEqual(self.client.get('/api/eventos/').status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class RegistroTests(APITestCase):
+    def registrar(self, **datos):
+        datos = {'nombre': 'Carla Gómez', 'username': 'carla', 'password': 'Fiesta-2026-cali', **datos}
+        return self.client.post('/api/auth/registro/', datos)
+
+    def test_registro_crea_la_cuenta_y_deja_la_sesion_iniciada(self):
+        res = self.registrar()
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['usuario']['username'], 'carla')
+        self.assertEqual(res.data['usuario']['nombre'], 'Carla Gómez')
+        usuario = User.objects.get(username='carla')
+        self.assertEqual((usuario.first_name, usuario.last_name), ('Carla', 'Gómez'))
+        self.assertNotEqual(usuario.password, 'Fiesta-2026-cali')  # se guarda cifrada
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {res.data['token']}")
+        self.assertEqual(self.client.get('/api/eventos/').data, [])
+
+    def test_la_cuenta_nueva_puede_iniciar_sesion(self):
+        self.registrar()
+
+        res = self.client.post('/api/auth/login/', {'username': 'carla', 'password': 'Fiesta-2026-cali'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_usuario_repetido_sin_importar_mayusculas(self):
+        self.registrar()
+
+        res = self.registrar(username='Carla')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['username'], ['Ese nombre de usuario ya está en uso. Elige otro.'])
+        self.assertEqual(User.objects.filter(username__iexact='carla').count(), 1)
+
+    def test_contrasena_debil_se_rechaza_con_mensajes_en_espanol(self):
+        res = self.registrar(password='123')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('La contraseña es demasiado corta. Debe contener por lo menos 8 caracteres.', res.data['password'])
+        self.assertIn('Esta contraseña es completamente numérica.', res.data['password'])
+        self.assertFalse(User.objects.filter(username='carla').exists())
+
+    def test_campos_obligatorios_y_usuario_con_espacios(self):
+        vacio = self.client.post('/api/auth/registro/', {})
+        con_espacios = self.registrar(username='carla gomez')
+
+        self.assertEqual(set(vacio.data), {'nombre', 'username', 'password'})
+        self.assertEqual(con_espacios.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('username', con_espacios.data)
+
+
 class AislamientoPorOrganizadorTests(APITestCase):
     """US-11, escenarios 3 y 4."""
 

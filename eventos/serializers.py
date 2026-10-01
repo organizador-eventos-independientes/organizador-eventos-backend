@@ -1,5 +1,12 @@
+from django.contrib.auth import get_user_model, password_validation
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import RegexValidator
+from django.db import IntegrityError
+from django.utils import translation
 from rest_framework import serializers
 from .models import Evento, Subtarea
+
+User = get_user_model()
 
 class EventoSerializer(serializers.ModelSerializer):
     titulo = serializers.CharField(
@@ -126,6 +133,75 @@ class LoginSerializer(serializers.Serializer):
         trim_whitespace=False,
         style={'input_type': 'password'}
     )
+
+
+USUARIO_EN_USO = 'Ese nombre de usuario ya está en uso. Elige otro.'
+
+
+class RegistroSerializer(serializers.Serializer):
+    nombre = serializers.CharField(
+        max_length=150,
+        error_messages={
+            'required': 'Escribe tu nombre.',
+            'blank': 'Escribe tu nombre.',
+            'max_length': 'El nombre no puede superar 150 caracteres.'
+        }
+    )
+
+    username = serializers.CharField(
+        max_length=150,
+        validators=[RegexValidator(
+            r'^[\w.@+-]+\Z',
+            'El usuario solo puede tener letras, números y los signos @ . + - _ (sin espacios).'
+        )],
+        error_messages={
+            'required': 'Escribe un nombre de usuario.',
+            'blank': 'Escribe un nombre de usuario.',
+            'max_length': 'El usuario no puede superar 150 caracteres.'
+        }
+    )
+
+    password = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        error_messages={
+            'required': 'Escribe una contraseña.',
+            'blank': 'Escribe una contraseña.'
+        }
+    )
+
+    def validate_username(self, value):
+        value = User.normalize_username(value)
+        # Sin distinguir mayúsculas, para que no existan "Ana" y "ana" a la vez.
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError(USUARIO_EN_USO)
+        return value
+
+    def validate(self, attrs):
+        nombre, _, apellido = attrs['nombre'].partition(' ')
+        usuario = User(username=attrs['username'], first_name=nombre, last_name=apellido.strip())
+
+        # Mismas reglas de contraseña que el resto de Django
+        # (AUTH_PASSWORD_VALIDATORS), con los mensajes en español.
+        with translation.override('es'):
+            try:
+                password_validation.validate_password(attrs['password'], usuario)
+            except DjangoValidationError as error:
+                raise serializers.ValidationError({'password': list(error.messages)})
+
+        attrs['usuario'] = usuario
+        return attrs
+
+    def create(self, validated_data):
+        usuario = validated_data['usuario']
+        usuario.set_password(validated_data['password'])
+        try:
+            usuario.save()
+        except IntegrityError:
+            # Otro registro tomó el mismo usuario justo al mismo tiempo.
+            raise serializers.ValidationError({'username': [USUARIO_EN_USO]})
+        return usuario
 
 
 class UsuarioSesionSerializer(serializers.Serializer):

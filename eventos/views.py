@@ -13,8 +13,20 @@ from .serializers import (
     EventoSerializer,
     LoginRespuestaSerializer,
     LoginSerializer,
+    RegistroSerializer,
     SubtareaSerializer,
 )
+
+
+def datos_sesion(user, token):
+    return {
+        'token': token.key,
+        'usuario': {
+            'id': user.id,
+            'username': user.username,
+            'nombre': user.get_full_name() or user.username,
+        },
+    }
 
 
 class LoginView(APIView):
@@ -48,14 +60,31 @@ class LoginView(APIView):
             )
 
         token, _ = Token.objects.get_or_create(user=user)
-        return Response({
-            'token': token.key,
-            'usuario': {
-                'id': user.id,
-                'username': user.username,
-                'nombre': user.get_full_name() or user.username,
-            },
-        })
+        return Response(datos_sesion(user, token))
+
+
+class RegistroView(APIView):
+    # Registro público: cualquiera puede crear su cuenta de organizador.
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        request=RegistroSerializer,
+        responses={
+            201: LoginRespuestaSerializer,
+            400: OpenApiResponse(
+                description='Datos inválidos, contraseña débil o usuario en uso.'
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = RegistroSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        # La cuenta queda con la sesión iniciada, igual que tras el login.
+        token = Token.objects.create(user=user)
+        return Response(datos_sesion(user, token), status=status.HTTP_201_CREATED)
 
 
 class LogoutView(APIView):
