@@ -127,6 +127,58 @@ class SubtareaSerializer(serializers.ModelSerializer):
         return value
 
 
+class HoyFiltrosSerializer(serializers.Serializer):
+    evento = serializers.PrimaryKeyRelatedField(
+        queryset=Evento.objects.none(),
+        required=False,
+        error_messages={
+            'does_not_exist': 'El evento no existe.',
+            'incorrect_type': 'El evento debe indicarse con su id.'
+        }
+    )
+
+    estado = serializers.ChoiceField(
+        choices=['vencidas', 'hoy', 'proximas'],
+        required=False,
+        error_messages={
+            'invalid_choice': 'El estado debe ser vencidas, hoy o proximas.'
+        }
+    )
+
+    dias = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        help_text='Solo limita las próximas: las que vencen en los próximos N días.',
+        error_messages={
+            'invalid': 'Los días deben ser un número entero.',
+            'min_value': 'Los días deben ser mayores que 0.'
+        }
+    )
+
+    def get_fields(self):
+        fields = super().get_fields()
+        # Un evento ajeno se rechaza igual que uno inexistente.
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated:
+            fields['evento'].queryset = Evento.objects.filter(organizador=request.user)
+        return fields
+
+
+class SubtareaHoySerializer(serializers.ModelSerializer):
+    evento_titulo = serializers.CharField(source='evento.titulo', read_only=True)
+
+    class Meta:
+        model = Subtarea
+        fields = ['id', 'evento', 'evento_titulo', 'nombre', 'plazo', 'horas_estimadas']
+
+
+class HoyRespuestaSerializer(serializers.Serializer):
+    fecha = serializers.DateField()
+    vencidas = SubtareaHoySerializer(many=True)
+    hoy = SubtareaHoySerializer(many=True)
+    proximas = SubtareaHoySerializer(many=True)
+
+
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(

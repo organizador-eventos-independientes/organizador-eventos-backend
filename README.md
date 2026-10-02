@@ -125,6 +125,34 @@ PATCH  /api/subtareas/{id}/
 DELETE /api/subtareas/{id}/
 ```
 
+### Vista "Hoy" (US-04 y US-05)
+
+```text
+GET    /api/subtareas/hoy/
+```
+
+Devuelve las gestiones del organizador autenticado agrupadas según su plazo respecto a hoy (zona horaria `America/Bogota`):
+
+```json
+{
+  "fecha": "2026-10-02",
+  "vencidas": [{ "id": 4, "evento": 1, "evento_titulo": "Boda Ana y Luis", "nombre": "Pagar DJ", "plazo": "2026-09-30", "horas_estimadas": "2.00" }],
+  "hoy": [],
+  "proximas": []
+}
+```
+
+* **vencidas**: plazo anterior a hoy. **hoy**: plazo igual a hoy. **proximas**: plazo posterior a hoy.
+* Dentro de cada grupo: plazo más cercano primero; si coinciden, la de menos horas estimadas.
+
+Filtros opcionales (se pueden combinar y no cambian el orden):
+
+* `evento=<id>`: solo las gestiones de ese evento.
+* `estado=vencidas|hoy|proximas`: solo ese grupo; los demás llegan vacíos.
+* `dias=<n>`: limita las próximas a las que vencen en los próximos `n` días.
+
+Un filtro no válido (estado desconocido, `dias` menor que 1, evento inexistente o de otro organizador) responde `400` con el error en ese campo.
+
 ## Documentación de la API
 
 La API cuenta con documentación interactiva mediante Swagger:

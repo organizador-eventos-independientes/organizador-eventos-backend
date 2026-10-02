@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.contrib.auth import authenticate
+from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action
@@ -11,6 +14,8 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
 from .models import Evento, Subtarea
 from .serializers import (
     EventoSerializer,
+    HoyFiltrosSerializer,
+    HoyRespuestaSerializer,
     LoginRespuestaSerializer,
     LoginSerializer,
     RegistroSerializer,
@@ -167,3 +172,47 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         if getattr(self, 'swagger_fake_view', False):  # generación del esquema OpenAPI
             return Subtarea.objects.none()
         return Subtarea.objects.filter(evento__organizador=self.request.user)
+
+    @extend_schema(
+        parameters=[HoyFiltrosSerializer],
+        responses={
+            200: HoyRespuestaSerializer,
+            400: OpenApiResponse(description='Algún filtro no es válido.'),
+        },
+    )
+    @action(detail=False, methods=['get'], url_path='hoy')
+    def hoy(self, request):
+        # Vista "Hoy" (US-04): vencidas, para hoy y próximas según el plazo
+        # respecto a hoy. Dentro de cada grupo, plazo más cercano primero y, si
+        # empatan, la de menos horas estimadas. Filtros opcionales (US-05).
+        filtros = HoyFiltrosSerializer(data=request.query_params, context={'request': request})
+        filtros.is_valid(raise_exception=True)
+        evento = filtros.validated_data.get('evento')
+        estado = filtros.validated_data.get('estado')
+        dias = filtros.validated_data.get('dias')
+
+        hoy = timezone.localdate()
+        subtareas = (
+            self.get_queryset()
+            .select_related('evento')
+            .order_by('plazo', 'horas_estimadas', 'nombre')
+        )
+        if evento is not None:
+            subtareas = subtareas.filter(evento=evento)
+        if estado is not None:
+            condicion = {'vencidas': 'plazo__lt', 'hoy': 'plazo', 'proximas': 'plazo__gt'}[estado]
+            subtareas = subtareas.filter(**{condicion: hoy})
+        if dias is not None:
+            # Vencidas y de hoy siempre caen dentro del rango: solo recorta las próximas.
+            subtareas = subtareas.filter(plazo__lte=hoy + timedelta(days=dias))
+
+        grupos = {'vencidas': [], 'hoy': [], 'proximas': []}
+        for subtarea in subtareas:
+            if subtarea.plazo < hoy:
+                grupos['vencidas'].append(subtarea)
+            elif subtarea.plazo == hoy:
+                grupos['hoy'].append(subtarea)
+            else:
+                grupos['proximas'].append(subtarea)
+
+        return Response(HoyRespuestaSerializer({'fecha': hoy, **grupos}).data)

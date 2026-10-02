@@ -122,7 +122,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Define qué día es "hoy" en la vista Hoy; en UTC, desde las 7 p. m. ya sería mañana.
+TIME_ZONE = 'America/Bogota'
 
 USE_I18N = True
 
