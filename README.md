@@ -19,6 +19,7 @@ API REST desarrollada para gestionar eventos y sus gestiones logísticas dentro 
 * Consultar las gestiones de un evento.
 * Actualizar y eliminar gestiones logísticas.
 * Reprogramar la fecha objetivo de una gestión logística (US-06).
+* Detectar conflicto por sobrecarga diaria al reprogramar (US-07), según el límite diario de horas de cada organizador (US-12).
 * Validar los datos recibidos por la API.
 * Validar que las horas estimadas de una gestión sean mayores que 0.
 * Registrarse, iniciar y cerrar sesión con usuario y contraseña (US-11); cada organizador solo ve sus propios eventos y gestiones.
@@ -130,14 +131,50 @@ PATCH  /api/subtareas/{id}/reprogramar/
 ### Reprogramar una gestión (US-06)
 
 ```text
-PATCH  /api/subtareas/{id}/reprogramar/    { "plazo": "YYYY-MM-DD" }
+PATCH  /api/subtareas/{id}/reprogramar/    { "plazo": "YYYY-MM-DD", "horas_estimadas"?: número }
 ```
 
-Cambia solo la fecha objetivo; si se envían otros campos, se ignoran. La nueva fecha debe ser válida y no anterior a hoy (sí se puede mover una gestión que ya está vencida).
+Cambia la fecha objetivo y, si se envían, las horas estimadas (para reducirlas y resolver un conflicto de US-07); otros campos se ignoran. La nueva fecha debe ser válida y no anterior a hoy (sí se puede mover una gestión que ya está vencida).
 
 * `200`: la gestión con la misma forma que en la vista "Hoy" (`{ id, evento, evento_titulo, nombre, plazo, horas_estimadas }`). Desde ese momento `GET /api/subtareas/hoy/` la devuelve en el grupo que le corresponde a su nueva fecha.
 * `400`: `{ "detail": "No se pudo reprogramar.", "plazo": ["motivo"] }`. La fecha guardada no cambia.
 * `404`: la gestión no existe o es de otro organizador.
+* `409`: conflicto por sobrecarga diaria (US-07). No se guarda nada.
+
+### Conflicto por sobrecarga diaria (US-07)
+
+Al reprogramar se suman las horas de todas las gestiones del organizador (de todos sus eventos) con esa fecha, más las de la gestión que se mueve. Un día sin gestiones empieza en 0 h. Si el total **supera** el límite diario (llegar justo al límite está permitido), responde `409`:
+
+```json
+{
+  "detail": "Quedarías con 7h de gestión planificadas (límite 6h)",
+  "conflicto": {
+    "fecha": "2026-10-13",
+    "limite": "6.00",
+    "planificadas": "5.00",
+    "horas_gestion": "2.00",
+    "total": "7.00",
+    "horas_disponibles": "1.00",
+    "siguiente_dia_disponible": "2026-10-14",
+    "gestiones_del_dia": [{ "id": 4, "evento": 1, "evento_titulo": "Boda Ana y Luis", "nombre": "Reservar salón", "plazo": "2026-10-13", "horas_estimadas": "5.00" }]
+  }
+}
+```
+
+Datos para resolverlo:
+
+* **Mover a otro día**: volver a llamar con otra fecha.
+* **Reducir horas estimadas**: `horas_disponibles` es lo máximo que cabe ese día (0 si ya está lleno). Se envía en `horas_estimadas` junto con la misma fecha.
+* **Posponer**: `siguiente_dia_disponible` es el primer día después del elegido en el que la gestión cabe. Es `null` si la gestión sola ya supera el límite.
+
+### Límite diario (US-12)
+
+```text
+GET    /api/configuracion/    -> { "limite_horas_diarias": "6.00" }
+PATCH  /api/configuracion/    { "limite_horas_diarias": 7.5 }
+```
+
+Cada organizador tiene un límite de horas de gestión por día; si nunca lo cambió, vale 6 h. Debe ser mayor que 0 y no superar 24 (máximo 2 decimales); si no es válido responde `400` con el error en `limite_horas_diarias`. También se puede cambiar desde `/admin/`.
 
 ### Vista "Hoy" (US-04 y US-05)
 

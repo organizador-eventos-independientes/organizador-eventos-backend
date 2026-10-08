@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Evento, Subtarea
+from .models import ConfiguracionOrganizador, Evento, Subtarea
 
 
 @admin.register(Evento)
@@ -13,3 +13,8 @@ class EventoAdmin(admin.ModelAdmin):
 @admin.register(Subtarea)
 class SubtareaAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'evento', 'plazo')
+
+
+@admin.register(ConfiguracionOrganizador)
+class ConfiguracionOrganizadorAdmin(admin.ModelAdmin):
+    list_display = ('organizador', 'limite_horas_diarias')

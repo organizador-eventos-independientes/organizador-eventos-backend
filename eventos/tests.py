@@ -1,11 +1,12 @@
 from datetime import date, time, timedelta
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import Evento, Subtarea
+from .models import ConfiguracionOrganizador, Evento, Subtarea
 
 User = get_user_model()
 
@@ -351,3 +352,163 @@ class ReprogramarSubtareaTests(APITestCase):
 
         self.gestion.refresh_from_db()
         self.assertEqual(self.gestion.plazo, self.hoy - timedelta(days=2))
+
+
+class SobrecargaDiariaTests(APITestCase):
+    """US-07: conflicto por sobrecarga diaria al reprogramar (límite de US-12)."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.boda = crear_evento(self.ana)
+        self.feria = crear_evento(self.ana, titulo='Feria del libro')
+        self.dia_x = timezone.localdate() + timedelta(days=5)
+        # La gestión que se retrasa: "buscar proveedores", 2 h, hoy.
+        self.proveedores = self.gestion('Buscar proveedores', timezone.localdate(), 2)
+
+    def gestion(self, nombre, plazo, horas, evento=None):
+        return Subtarea.objects.create(
+            evento=evento or self.boda, nombre=nombre, plazo=plazo, horas_estimadas=horas
+        )
+
+    def reprogramar(self, plazo, **extra):
+        return self.client.patch(
+            f'/api/subtareas/{self.proveedores.id}/reprogramar/',
+            {'plazo': plazo.isoformat(), **extra}
+        )
+
+    def test_escenario_1_conflicto_por_retraso_de_proveedores(self):
+        # Límite 6 h (por defecto); el día X ya tiene 5 h, en dos eventos.
+        reservar = self.gestion('Reservar salón', self.dia_x, 3)
+        stands = self.gestion('Montar stands', self.dia_x, 2, evento=self.feria)
+
+        res = self.reprogramar(self.dia_x)
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(res.data['detail'], 'Quedarías con 7h de gestión planificadas (límite 6h)')
+        conflicto = res.data['conflicto']
+        self.assertEqual(conflicto['fecha'], self.dia_x.isoformat())
+        self.assertEqual(Decimal(conflicto['limite']), 6)
+        self.assertEqual(Decimal(conflicto['planificadas']), 5)
+        self.assertEqual(Decimal(conflicto['horas_gestion']), 2)
+        self.assertEqual(Decimal(conflicto['total']), 7)
+        self.assertEqual(
+            [(s['id'], s['evento_titulo']) for s in conflicto['gestiones_del_dia']],
+            [(stands.id, 'Feria del libro'), (reservar.id, 'Boda Ana y Luis')]
+        )
+        self.proveedores.refresh_from_db()
+        self.assertEqual(self.proveedores.plazo, timezone.localdate())
+
+    def test_escenario_2_sin_conflicto_guarda_directo(self):
+        # 4 h + 2 h = 6 h: llega justo al límite, no lo supera.
+        self.gestion('Reservar salón', self.dia_x, 4)
+
+        res = self.reprogramar(self.dia_x)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.proveedores.refresh_from_db()
+        self.assertEqual(self.proveedores.plazo, self.dia_x)
+
+    def test_escenario_3_datos_para_resolver_el_conflicto(self):
+        self.gestion('Reservar salón', self.dia_x, 5)
+        self.gestion('Ensayo', self.dia_x + timedelta(days=1), 5)  # X+1 tampoco tiene espacio
+
+        conflicto = self.reprogramar(self.dia_x).data['conflicto']
+
+        # Reducir horas: caben 1 h. Posponer: el primer día con espacio es X+2.
+        self.assertEqual(Decimal(conflicto['horas_disponibles']), 1)
+        self.assertEqual(conflicto['siguiente_dia_disponible'], (self.dia_x + timedelta(days=2)).isoformat())
+
+    def test_reducir_horas_resuelve_el_conflicto(self):
+        self.gestion('Reservar salón', self.dia_x, 5)
+
+        res = self.reprogramar(self.dia_x, horas_estimadas='1')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(res.data['horas_estimadas']), 1)
+        self.proveedores.refresh_from_db()
+        self.assertEqual((self.proveedores.plazo, self.proveedores.horas_estimadas), (self.dia_x, 1))
+
+    def test_dia_vacio_empieza_en_0_horas(self):
+        self.proveedores.horas_estimadas = 7
+        self.proveedores.save()
+
+        res = self.reprogramar(self.dia_x)
+
+        # Sola ya supera el límite: no hay día al que posponerla.
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(res.data['detail'], 'Quedarías con 7h de gestión planificadas (límite 6h)')
+        self.assertEqual(Decimal(res.data['conflicto']['planificadas']), 0)
+        self.assertEqual(res.data['conflicto']['gestiones_del_dia'], [])
+        self.assertEqual(Decimal(res.data['conflicto']['horas_disponibles']), 6)
+        self.assertIsNone(res.data['conflicto']['siguiente_dia_disponible'])
+
+    def test_horas_con_decimales_en_el_mensaje(self):
+        self.gestion('Reservar salón', self.dia_x, '5.5')
+
+        res = self.reprogramar(self.dia_x)
+
+        self.assertEqual(res.data['detail'], 'Quedarías con 7,5h de gestión planificadas (límite 6h)')
+
+    def test_usa_el_limite_definido_por_el_organizador(self):
+        ConfiguracionOrganizador.objects.create(organizador=self.ana, limite_horas_diarias=8)
+        self.gestion('Reservar salón', self.dia_x, 5)
+
+        self.assertEqual(self.reprogramar(self.dia_x).status_code, status.HTTP_200_OK)
+
+    def test_no_cuenta_gestiones_de_otros_ni_la_misma_dos_veces(self):
+        beto = User.objects.create_user(username='beto', password='clave-beto-123')
+        self.gestion('De Beto', self.dia_x, 5, evento=crear_evento(beto, titulo='Evento de Beto'))
+        self.gestion('Reservar salón', self.dia_x, 4)
+        self.proveedores.plazo = self.dia_x
+        self.proveedores.save()
+
+        # Ya estaba en X: 4 h + sus 2 h = 6 h, sin contarla dos veces.
+        self.assertEqual(self.reprogramar(self.dia_x).status_code, status.HTTP_200_OK)
+
+    def test_error_de_validacion_no_guarda(self):
+        for extra in [{'horas_estimadas': '0'}, {'horas_estimadas': 'muchas'}]:
+            with self.subTest(extra=extra):
+                res = self.reprogramar(self.dia_x, **extra)
+
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(res.data['detail'], 'No se pudo reprogramar.')
+                self.assertIn('horas_estimadas', res.data)
+
+        self.proveedores.refresh_from_db()
+        self.assertEqual(self.proveedores.plazo, timezone.localdate())
+
+
+class ConfiguracionTests(APITestCase):
+    """US-12: límite diario de horas de gestión del organizador."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+
+    def test_por_defecto_es_6_horas(self):
+        self.client.force_authenticate(self.ana)
+
+        res = self.client.get('/api/configuracion/')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(res.data['limite_horas_diarias']), 6)
+
+    def test_cambiar_el_limite(self):
+        self.client.force_authenticate(self.ana)
+
+        res = self.client.patch('/api/configuracion/', {'limite_horas_diarias': '7.5'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.ana.configuracion.limite_horas_diarias, Decimal('7.5'))
+
+    def test_limite_no_valido(self):
+        self.client.force_authenticate(self.ana)
+
+        for valor in ['', '0', '-1', '25', '100', 'seis', '6.555']:
+            with self.subTest(valor=valor):
+                res = self.client.patch('/api/configuracion/', {'limite_horas_diarias': valor})
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn('limite_horas_diarias', res.data)
+
+    def test_exige_sesion(self):
+        self.assertEqual(self.client.get('/api/configuracion/').status_code, status.HTTP_401_UNAUTHORIZED)

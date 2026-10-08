@@ -1,5 +1,9 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
+
+LIMITE_HORAS_POR_DEFECTO = Decimal('6')
 
 
 class Evento(models.Model):
@@ -36,3 +40,22 @@ class Subtarea(models.Model):
 
     def __str__(self):
         return self.nombre
+
+
+class ConfiguracionOrganizador(models.Model):
+    # Límite de horas de gestión por día, sumando todos los eventos del
+    # organizador (US-12). Al reprogramar se avisa si un día lo supera (US-07).
+    # Se crea con el valor por defecto la primera vez que se consulta.
+    organizador = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='configuracion'
+    )
+    limite_horas_diarias = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=LIMITE_HORAS_POR_DEFECTO
+    )
+
+    def __str__(self):
+        return f'Configuración de {self.organizador}'

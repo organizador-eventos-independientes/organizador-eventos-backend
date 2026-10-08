@@ -4,7 +4,7 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError
 from django.utils import timezone, translation
 from rest_framework import serializers
-from .models import Evento, Subtarea
+from .models import ConfiguracionOrganizador, Evento, Subtarea
 
 User = get_user_model()
 
@@ -128,7 +128,8 @@ class SubtareaSerializer(serializers.ModelSerializer):
 
 
 class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
-    # US-06: solo cambia la fecha objetivo; el resto de la gestión no se toca.
+    # US-06: cambia la fecha objetivo; el resto de la gestión no se toca, salvo
+    # las horas estimadas si se envían (US-07: reducirlas para que quepan).
     plazo = serializers.DateField(
         required=True,
         error_messages={
@@ -138,15 +139,31 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
         }
     )
 
+    horas_estimadas = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        required=False,
+        error_messages={
+            'invalid': 'Las horas estimadas deben ser un número válido.'
+        }
+    )
+
     class Meta:
         model = Subtarea
-        fields = ['plazo']
+        fields = ['plazo', 'horas_estimadas']
 
     def validate_plazo(self, value):
         # Se puede mover una gestión vencida, pero no a una fecha ya pasada.
         if value < timezone.localdate():
             raise serializers.ValidationError(
                 'La fecha objetivo no puede ser anterior a hoy.'
+            )
+        return value
+
+    def validate_horas_estimadas(self, value):
+        if value <= 0:
+            raise serializers.ValidationError(
+                'Las horas estimadas deben ser mayores que 0.'
             )
         return value
 
@@ -201,6 +218,52 @@ class HoyRespuestaSerializer(serializers.Serializer):
     vencidas = SubtareaHoySerializer(many=True)
     hoy = SubtareaHoySerializer(many=True)
     proximas = SubtareaHoySerializer(many=True)
+
+
+class ConflictoSobrecargaSerializer(serializers.Serializer):
+    # US-07: el día elegido y lo que ya tiene planificado, más los datos para
+    # resolverlo (reducir horas o posponer al siguiente día con espacio).
+    fecha = serializers.DateField()
+    limite = serializers.DecimalField(max_digits=4, decimal_places=2)
+    planificadas = serializers.DecimalField(max_digits=9, decimal_places=2)
+    horas_gestion = serializers.DecimalField(max_digits=5, decimal_places=2)
+    total = serializers.DecimalField(max_digits=9, decimal_places=2)
+    horas_disponibles = serializers.DecimalField(max_digits=4, decimal_places=2)
+    siguiente_dia_disponible = serializers.DateField(allow_null=True)
+    gestiones_del_dia = SubtareaHoySerializer(many=True)
+
+
+class ConflictoRespuestaSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    conflicto = ConflictoSobrecargaSerializer()
+
+
+class ConfiguracionSerializer(serializers.ModelSerializer):
+    # US-12: límite de horas de gestión por día (todos los eventos sumados).
+    limite_horas_diarias = serializers.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        required=True,
+        error_messages={
+            'required': 'Indica tu límite diario de horas.',
+            'null': 'Indica tu límite diario de horas.',
+            'invalid': 'El límite diario debe ser un número válido.',
+            'max_digits': 'El límite diario no puede superar 24 horas.',
+            'max_whole_digits': 'El límite diario no puede superar 24 horas.',
+            'max_decimal_places': 'Usa máximo 2 decimales (ej. 6.5).'
+        }
+    )
+
+    class Meta:
+        model = ConfiguracionOrganizador
+        fields = ['limite_horas_diarias']
+
+    def validate_limite_horas_diarias(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('El límite diario debe ser mayor que 0.')
+        if value > 24:
+            raise serializers.ValidationError('El límite diario no puede superar 24 horas.')
+        return value
 
 
 class LoginSerializer(serializers.Serializer):

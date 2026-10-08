@@ -11,8 +11,12 @@ from rest_framework import status
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
+from .carga import configuracion_de, detectar_sobrecarga
 from .models import Evento, Subtarea
 from .serializers import (
+    ConfiguracionSerializer,
+    ConflictoRespuestaSerializer,
+    ConflictoSobrecargaSerializer,
     EventoSerializer,
     HoyFiltrosSerializer,
     HoyRespuestaSerializer,
@@ -100,6 +104,27 @@ class LogoutView(APIView):
         # Borra el token: deja de servir aunque alguien lo haya copiado.
         request.auth.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ConfiguracionView(APIView):
+    # US-12: límite diario de horas de gestión del organizador autenticado.
+
+    @extend_schema(responses={200: ConfiguracionSerializer})
+    def get(self, request):
+        return Response(ConfiguracionSerializer(configuracion_de(request.user)).data)
+
+    @extend_schema(
+        request=ConfiguracionSerializer,
+        responses={
+            200: ConfiguracionSerializer,
+            400: OpenApiResponse(description='El límite diario no es válido.'),
+        },
+    )
+    def patch(self, request):
+        serializer = ConfiguracionSerializer(configuracion_de(request.user), data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class EventoViewSet(viewsets.ModelViewSet):
@@ -190,11 +215,15 @@ class SubtareaViewSet(viewsets.ModelViewSet):
             404: OpenApiResponse(
                 description='La gestión no existe o es de otro organizador.'
             ),
+            409: OpenApiResponse(
+                response=ConflictoRespuestaSerializer,
+                description='Sobrecarga diaria (US-07): ese día superaría el límite. No se guarda.'
+            ),
         },
     )
     @action(detail=True, methods=['patch'], url_path='reprogramar')
     def reprogramar(self, request, pk=None):
-        # US-06: cambia solo la fecha objetivo. Devuelve la gestión con la misma
+        # US-06: cambia la fecha objetivo. Devuelve la gestión con la misma
         # forma que en /hoy para que el frontend la mueva a su nuevo grupo.
         subtarea = self.get_object()
         serializer = self.get_serializer(subtarea, data=request.data)
@@ -203,6 +232,23 @@ class SubtareaViewSet(viewsets.ModelViewSet):
             return Response(
                 {'detail': 'No se pudo reprogramar.', **serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # US-07: si ese día supera el límite diario, no se guarda y se informa
+        # el conflicto con los datos para resolverlo.
+        conflicto = detectar_sobrecarga(
+            request.user,
+            subtarea,
+            serializer.validated_data['plazo'],
+            serializer.validated_data.get('horas_estimadas', subtarea.horas_estimadas)
+        )
+        if conflicto is not None:
+            return Response(
+                {
+                    'detail': conflicto['mensaje'],
+                    'conflicto': ConflictoSobrecargaSerializer(conflicto).data,
+                },
+                status=status.HTTP_409_CONFLICT
             )
 
         serializer.save()
