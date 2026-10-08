@@ -7,9 +7,12 @@ from .models import ConfiguracionOrganizador, Subtarea
 
 
 def configuracion_de(organizador):
-    # Si el organizador nunca definió su límite, se crea con el valor por defecto.
-    configuracion, _ = ConfiguracionOrganizador.objects.get_or_create(organizador=organizador)
-    return configuracion
+    # Si el organizador nunca guardó su límite, se usa uno sin guardar con el
+    # valor por defecto (6 h); se guarda la primera vez que lo cambia.
+    return (
+        ConfiguracionOrganizador.objects.filter(organizador=organizador).first()
+        or ConfiguracionOrganizador(organizador=organizador)
+    )
 
 
 def horas_texto(horas):

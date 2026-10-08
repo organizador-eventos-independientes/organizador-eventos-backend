@@ -170,11 +170,13 @@ Datos para resolverlo:
 ### Límite diario (US-12)
 
 ```text
-GET    /api/configuracion/    -> { "limite_horas_diarias": "6.00" }
-PATCH  /api/configuracion/    { "limite_horas_diarias": 7.5 }
+GET    /api/configuracion/    -> { "limite_horas_diarias": "6.00", "por_defecto": true }
+PATCH  /api/configuracion/    { "limite_horas_diarias": 4 }
 ```
 
-Cada organizador tiene un límite de horas de gestión por día; si nunca lo cambió, vale 6 h. Debe ser mayor que 0 y no superar 24 (máximo 2 decimales); si no es válido responde `400` con el error en `limite_horas_diarias`. También se puede cambiar desde `/admin/`.
+Cada organizador tiene su propio límite de horas de gestión por día, y US-07 usa siempre el del organizador autenticado. Si nunca lo guardó vale 6 h y `por_defecto` es `true` (consultarlo no guarda nada).
+
+El límite debe estar **entre 1 y 16 horas**, ambos incluidos, con máximo 2 decimales. Si no lo está, no se guarda y responde `400`: `{ "limite_horas_diarias": ["El límite debe estar entre 1 y 16 horas."] }`. El mismo rango se aplica al cambiarlo desde `/admin/`.
 
 ### Vista "Hoy" (US-04 y US-05)
 

@@ -4,7 +4,14 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError
 from django.utils import timezone, translation
 from rest_framework import serializers
-from .models import ConfiguracionOrganizador, Evento, Subtarea
+from .models import (
+    LIMITE_FUERA_DE_RANGO,
+    LIMITE_HORAS_MAXIMO,
+    LIMITE_HORAS_MINIMO,
+    ConfiguracionOrganizador,
+    Evento,
+    Subtarea,
+)
 
 User = get_user_model()
 
@@ -239,7 +246,8 @@ class ConflictoRespuestaSerializer(serializers.Serializer):
 
 
 class ConfiguracionSerializer(serializers.ModelSerializer):
-    # US-12: límite de horas de gestión por día (todos los eventos sumados).
+    # US-12: límite de horas de gestión por día (todos los eventos sumados),
+    # entre 1 y 16 h. `por_defecto` indica que nunca lo guardó (vale 6 h).
     limite_horas_diarias = serializers.DecimalField(
         max_digits=4,
         decimal_places=2,
@@ -247,22 +255,24 @@ class ConfiguracionSerializer(serializers.ModelSerializer):
         error_messages={
             'required': 'Indica tu límite diario de horas.',
             'null': 'Indica tu límite diario de horas.',
-            'invalid': 'El límite diario debe ser un número válido.',
-            'max_digits': 'El límite diario no puede superar 24 horas.',
-            'max_whole_digits': 'El límite diario no puede superar 24 horas.',
+            'invalid': f'El límite debe ser un número. {LIMITE_FUERA_DE_RANGO}',
+            'max_digits': LIMITE_FUERA_DE_RANGO,
+            'max_whole_digits': LIMITE_FUERA_DE_RANGO,
             'max_decimal_places': 'Usa máximo 2 decimales (ej. 6.5).'
         }
     )
+    por_defecto = serializers.SerializerMethodField()
 
     class Meta:
         model = ConfiguracionOrganizador
-        fields = ['limite_horas_diarias']
+        fields = ['limite_horas_diarias', 'por_defecto']
+
+    def get_por_defecto(self, configuracion) -> bool:
+        return configuracion.pk is None
 
     def validate_limite_horas_diarias(self, value):
-        if value <= 0:
-            raise serializers.ValidationError('El límite diario debe ser mayor que 0.')
-        if value > 24:
-            raise serializers.ValidationError('El límite diario no puede superar 24 horas.')
+        if not LIMITE_HORAS_MINIMO <= value <= LIMITE_HORAS_MAXIMO:
+            raise serializers.ValidationError(LIMITE_FUERA_DE_RANGO)
         return value
 
 

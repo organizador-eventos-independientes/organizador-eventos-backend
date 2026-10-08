@@ -480,35 +480,95 @@ class SobrecargaDiariaTests(APITestCase):
 
 
 class ConfiguracionTests(APITestCase):
-    """US-12: límite diario de horas de gestión del organizador."""
+    """US-12: configurar el límite diario de horas de gestión."""
 
     def setUp(self):
         self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.beto = User.objects.create_user(username='beto', password='clave-beto-123')
 
-    def test_por_defecto_es_6_horas(self):
-        self.client.force_authenticate(self.ana)
+    def limite(self, usuario):
+        self.client.force_authenticate(usuario)
+        return self.client.get('/api/configuracion/').data
 
-        res = self.client.get('/api/configuracion/')
+    def guardar(self, usuario, valor):
+        self.client.force_authenticate(usuario)
+        return self.client.patch('/api/configuracion/', {'limite_horas_diarias': valor})
+
+    def test_escenario_1_ver_limite_actual_por_defecto_6h(self):
+        datos = self.limite(self.ana)
+
+        self.assertEqual(Decimal(datos['limite_horas_diarias']), 6)
+        self.assertTrue(datos['por_defecto'])
+        # Consultar no guarda nada: sigue siendo el valor por defecto.
+        self.assertFalse(ConfiguracionOrganizador.objects.exists())
+
+    def test_escenario_2_actualizar_a_4h_y_us07_lo_usa(self):
+        res = self.guardar(self.ana, '4')
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(Decimal(res.data['limite_horas_diarias']), 6)
+        self.assertEqual(Decimal(res.data['limite_horas_diarias']), 4)
+        self.assertFalse(res.data['por_defecto'])
+        self.assertEqual(Decimal(self.limite(self.ana)['limite_horas_diarias']), 4)
 
-    def test_cambiar_el_limite(self):
-        self.client.force_authenticate(self.ana)
+        # 3 h + 2 h = 5 h: con 6 h cabía, con 4 h es conflicto.
+        evento = crear_evento(self.ana)
+        dia = timezone.localdate() + timedelta(days=3)
+        Subtarea.objects.create(evento=evento, nombre='Reservar salón', plazo=dia, horas_estimadas=3)
+        proveedores = Subtarea.objects.create(
+            evento=evento, nombre='Buscar proveedores', plazo=timezone.localdate(), horas_estimadas=2
+        )
+        conflicto = self.client.patch(
+            f'/api/subtareas/{proveedores.id}/reprogramar/', {'plazo': dia.isoformat()}
+        )
+        self.assertEqual(conflicto.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(conflicto.data['detail'], 'Quedarías con 5h de gestión planificadas (límite 4h)')
 
-        res = self.client.patch('/api/configuracion/', {'limite_horas_diarias': '7.5'})
+    def test_escenario_3_fuera_de_rango_no_guarda(self):
+        self.guardar(self.ana, '6')
 
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(self.ana.configuracion.limite_horas_diarias, Decimal('7.5'))
-
-    def test_limite_no_valido(self):
-        self.client.force_authenticate(self.ana)
-
-        for valor in ['', '0', '-1', '25', '100', 'seis', '6.555']:
+        for valor in ['0', '0.99', '-1', '16.01', '17', '100']:
             with self.subTest(valor=valor):
-                res = self.client.patch('/api/configuracion/', {'limite_horas_diarias': valor})
+                res = self.guardar(self.ana, valor)
+
                 self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-                self.assertIn('limite_horas_diarias', res.data)
+                self.assertEqual(
+                    res.data['limite_horas_diarias'], ['El límite debe estar entre 1 y 16 horas.']
+                )
+
+        for valor in ['', 'seis', '6.555']:
+            with self.subTest(valor=valor):
+                self.assertEqual(self.guardar(self.ana, valor).status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertEqual(self.ana.configuracion.limite_horas_diarias, 6)
+
+    def test_escenario_3_los_extremos_son_validos(self):
+        for valor in ['1', '16']:
+            with self.subTest(valor=valor):
+                self.assertEqual(self.guardar(self.ana, valor).status_code, status.HTTP_200_OK)
+
+    def test_escenario_4_cada_organizador_tiene_su_limite(self):
+        self.guardar(self.ana, '6')
+        self.guardar(self.beto, '4')
+
+        self.assertEqual(Decimal(self.limite(self.beto)['limite_horas_diarias']), 4)
+        self.assertEqual(Decimal(self.limite(self.ana)['limite_horas_diarias']), 6)
+
+        # El mismo caso (3 h + 2 h = 5 h): para A cabe, para B es conflicto.
+        dia = timezone.localdate() + timedelta(days=3)
+        for usuario, esperado in [(self.ana, status.HTTP_200_OK), (self.beto, status.HTTP_409_CONFLICT)]:
+            with self.subTest(usuario=usuario.username):
+                evento = crear_evento(usuario)
+                Subtarea.objects.create(evento=evento, nombre='Reservar salón', plazo=dia, horas_estimadas=3)
+                gestion = Subtarea.objects.create(
+                    evento=evento, nombre='Buscar proveedores', plazo=timezone.localdate(), horas_estimadas=2
+                )
+                self.client.force_authenticate(usuario)
+                res = self.client.patch(f'/api/subtareas/{gestion.id}/reprogramar/', {'plazo': dia.isoformat()})
+                self.assertEqual(res.status_code, esperado)
 
     def test_exige_sesion(self):
-        self.assertEqual(self.client.get('/api/configuracion/').status_code, status.HTTP_401_UNAUTHORIZED)
+        for res in [
+            self.client.get('/api/configuracion/'),
+            self.client.patch('/api/configuracion/', {'limite_horas_diarias': '4'}),
+        ]:
+            self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)

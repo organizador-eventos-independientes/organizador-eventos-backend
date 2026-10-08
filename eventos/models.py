@@ -1,9 +1,16 @@
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+# Límite diario de horas de gestión (US-12).
 LIMITE_HORAS_POR_DEFECTO = Decimal('6')
+LIMITE_HORAS_MINIMO = 1
+LIMITE_HORAS_MAXIMO = 16
+LIMITE_FUERA_DE_RANGO = (
+    f'El límite debe estar entre {LIMITE_HORAS_MINIMO} y {LIMITE_HORAS_MAXIMO} horas.'
+)
 
 
 class Evento(models.Model):
@@ -45,7 +52,7 @@ class Subtarea(models.Model):
 class ConfiguracionOrganizador(models.Model):
     # Límite de horas de gestión por día, sumando todos los eventos del
     # organizador (US-12). Al reprogramar se avisa si un día lo supera (US-07).
-    # Se crea con el valor por defecto la primera vez que se consulta.
+    # Solo existe si el organizador lo guardó; si no, se usa el valor por defecto.
     organizador = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -54,7 +61,11 @@ class ConfiguracionOrganizador(models.Model):
     limite_horas_diarias = models.DecimalField(
         max_digits=4,
         decimal_places=2,
-        default=LIMITE_HORAS_POR_DEFECTO
+        default=LIMITE_HORAS_POR_DEFECTO,
+        validators=[
+            MinValueValidator(LIMITE_HORAS_MINIMO, LIMITE_FUERA_DE_RANGO),
+            MaxValueValidator(LIMITE_HORAS_MAXIMO, LIMITE_FUERA_DE_RANGO),
+        ]
     )
 
     def __str__(self):
