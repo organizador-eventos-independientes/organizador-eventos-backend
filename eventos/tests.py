@@ -588,3 +588,101 @@ class ConfiguracionTests(APITestCase):
             self.client.patch('/api/configuracion/', {'limite_horas_diarias': '4'}),
         ]:
             self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class PlazoDentroDelEventoTests(APITestCase):
+    """La fecha de una gestión no puede ser posterior a la fecha del evento."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.evento = crear_evento(self.ana)
+        self.dia_evento = self.evento.fecha
+        self.dia_siguiente = self.dia_evento + timedelta(days=1)
+        self.mensaje = f'({self.dia_evento:%d/%m/%Y}).'
+
+    def gestion(self, nombre='Reservar salón', plazo=None, horas=2):
+        return Subtarea.objects.create(
+            evento=self.evento, nombre=nombre, plazo=plazo or timezone.localdate(), horas_estimadas=horas
+        )
+
+    def crear(self, plazo, url=None, **extra):
+        datos = {'nombre': 'Reservar salón', 'plazo': plazo.isoformat(), 'horas_estimadas': '2', **extra}
+        return self.client.post(url or f'/api/eventos/{self.evento.id}/subtareas/', datos)
+
+    def test_crear_con_plazo_hasta_el_dia_del_evento(self):
+        res = self.crear(self.dia_evento)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['plazo'], self.dia_evento.isoformat())
+
+    def test_crear_con_plazo_posterior_al_evento_no_guarda(self):
+        for res in [
+            self.crear(self.dia_siguiente),
+            self.crear(self.dia_siguiente, url='/api/subtareas/', evento=self.evento.id),
+        ]:
+            with self.subTest(url=res.wsgi_request.path):
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(
+                    res.data['plazo'],
+                    [f'El plazo no puede ser posterior a la fecha del evento {self.mensaje}']
+                )
+
+        self.assertFalse(Subtarea.objects.exists())
+
+    def test_al_crear_desde_el_evento_se_valida_contra_ese_evento(self):
+        # Aunque se envíe otro evento (más tardío), la gestión es del de la URL.
+        otro = crear_evento(self.ana, titulo='Feria del libro')
+        otro.fecha = self.dia_evento + timedelta(days=10)
+        otro.save()
+
+        res = self.crear(self.dia_siguiente, evento=otro.id)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('plazo', res.data)
+
+    def test_editar_con_plazo_posterior_al_evento_no_guarda(self):
+        gestion = self.gestion()
+
+        res = self.client.patch(f'/api/subtareas/{gestion.id}/', {'plazo': self.dia_siguiente.isoformat()})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('plazo', res.data)
+        gestion.refresh_from_db()
+        self.assertEqual(gestion.plazo, timezone.localdate())
+
+    def test_editar_otros_campos_no_exige_el_plazo(self):
+        gestion = self.gestion()
+
+        res = self.client.patch(f'/api/subtareas/{gestion.id}/', {'nombre': 'Reservar salón grande'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_reprogramar_hasta_el_dia_del_evento(self):
+        gestion = self.gestion()
+        url = f'/api/subtareas/{gestion.id}/reprogramar/'
+
+        despues = self.client.patch(url, {'plazo': self.dia_siguiente.isoformat()})
+        mismo_dia = self.client.patch(url, {'plazo': self.dia_evento.isoformat()})
+
+        self.assertEqual(despues.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(despues.data['detail'], 'No se pudo reprogramar.')
+        self.assertEqual(
+            despues.data['plazo'],
+            [f'La fecha objetivo no puede ser posterior a la fecha del evento {self.mensaje}']
+        )
+        self.assertEqual(mismo_dia.status_code, status.HTTP_200_OK)
+        gestion.refresh_from_db()
+        self.assertEqual(gestion.plazo, self.dia_evento)
+
+    def test_posponer_no_pasa_de_la_fecha_del_evento(self):
+        # La víspera y el día del evento ya están llenos: no hay a dónde posponer.
+        vispera = self.dia_evento - timedelta(days=1)
+        self.gestion('Ensayo', vispera, 5)
+        self.gestion('Decoración', self.dia_evento, 5)
+        gestion = self.gestion('Buscar proveedores')
+
+        res = self.client.patch(f'/api/subtareas/{gestion.id}/reprogramar/', {'plazo': vispera.isoformat()})
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertIsNone(res.data['conflicto']['siguiente_dia_disponible'])

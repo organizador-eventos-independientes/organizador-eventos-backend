@@ -128,13 +128,15 @@ DELETE /api/subtareas/{id}/
 PATCH  /api/subtareas/{id}/reprogramar/
 ```
 
+El `plazo` de una gestión no puede ser posterior a la fecha de su evento (el mismo día sí). Si lo es, responde `400` con `{ "plazo": ["El plazo no puede ser posterior a la fecha del evento (DD/MM/AAAA)."] }`.
+
 ### Reprogramar una gestión (US-06)
 
 ```text
 PATCH  /api/subtareas/{id}/reprogramar/    { "plazo": "YYYY-MM-DD", "horas_estimadas"?: número }
 ```
 
-Cambia la fecha objetivo y, si se envían, las horas estimadas (para reducirlas y resolver un conflicto de US-07); otros campos se ignoran. La nueva fecha debe ser válida y no anterior a hoy (sí se puede mover una gestión que ya está vencida).
+Cambia la fecha objetivo y, si se envían, las horas estimadas (para reducirlas y resolver un conflicto de US-07); otros campos se ignoran. La nueva fecha debe ser válida, no anterior a hoy (sí se puede mover una gestión que ya está vencida) ni posterior a la fecha del evento.
 
 * `200`: la gestión con la misma forma que en la vista "Hoy" (`{ id, evento, evento_titulo, nombre, plazo, horas_estimadas }`). Desde ese momento `GET /api/subtareas/hoy/` la devuelve en el grupo que le corresponde a su nueva fecha.
 * `400`: `{ "detail": "No se pudo reprogramar.", "plazo": ["motivo"] }`. La fecha guardada no cambia.
@@ -165,7 +167,7 @@ Datos para resolverlo:
 
 * **Mover a otro día**: volver a llamar con otra fecha.
 * **Reducir horas estimadas**: `horas_disponibles` es lo máximo que cabe ese día (0 si ya está lleno). Se envía en `horas_estimadas` junto con la misma fecha.
-* **Posponer**: `siguiente_dia_disponible` es el primer día después del elegido en el que la gestión cabe. Es `null` si la gestión sola ya supera el límite.
+* **Posponer**: `siguiente_dia_disponible` es el primer día después del elegido en el que la gestión cabe, sin pasar de la fecha del evento. Es `null` si la gestión sola ya supera el límite o si no queda ningún día con espacio hasta el evento.
 
 ### Límite diario (US-12)
 

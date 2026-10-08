@@ -133,6 +133,20 @@ class SubtareaSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate(self, attrs):
+        # El plazo no puede ser posterior a la fecha del evento (el mismo día
+        # sí). Al crearla desde /eventos/:id/subtareas/ el evento llega en el
+        # contexto; al editarla, se usa lo que ya tiene si no se cambia.
+        if 'plazo' not in attrs and 'evento' not in attrs:
+            return attrs
+        evento = self.context.get('evento') or attrs.get('evento') or getattr(self.instance, 'evento', None)
+        plazo = attrs.get('plazo') or getattr(self.instance, 'plazo', None)
+        if evento is not None and plazo is not None and plazo > evento.fecha:
+            raise serializers.ValidationError({
+                'plazo': f'El plazo no puede ser posterior a la fecha del evento ({evento.fecha:%d/%m/%Y}).'
+            })
+        return attrs
+
 
 class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
     # US-06: cambia la fecha objetivo y, si se envían, las horas estimadas (el
@@ -169,6 +183,12 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
         if value < timezone.localdate():
             raise serializers.ValidationError(
                 'La fecha objetivo no puede ser anterior a hoy.'
+            )
+        # Ni posterior a la fecha del evento (el mismo día sí).
+        evento = self.instance.evento
+        if value > evento.fecha:
+            raise serializers.ValidationError(
+                f'La fecha objetivo no puede ser posterior a la fecha del evento ({evento.fecha:%d/%m/%Y}).'
             )
         return value
 

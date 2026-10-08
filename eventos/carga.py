@@ -49,14 +49,17 @@ def detectar_sobrecarga(organizador, subtarea, plazo, horas):
         'total': total,
         # Para "reducir horas": lo máximo que cabe ese día.
         'horas_disponibles': max(limite - planificadas, Decimal('0')),
-        'siguiente_dia_disponible': siguiente_dia_con_espacio(otras, plazo, horas, limite),
+        'siguiente_dia_disponible': siguiente_dia_con_espacio(
+            otras, plazo, horas, limite, subtarea.evento.fecha
+        ),
         'gestiones_del_dia': del_dia,
     }
 
 
-def siguiente_dia_con_espacio(otras, desde, horas, limite):
+def siguiente_dia_con_espacio(otras, desde, horas, limite, hasta):
     # Para "posponer": el primer día después de `desde` en el que la gestión
-    # cabe. Si sola ya supera el límite, ningún día sirve.
+    # cabe, sin pasar de `hasta` (la fecha del evento). Si sola ya supera el
+    # límite o no queda espacio antes del evento, ningún día sirve.
     if horas > limite:
         return None
 
@@ -68,6 +71,8 @@ def siguiente_dia_con_espacio(otras, desde, horas, limite):
         .values_list('plazo', 'horas')
     )
     dia = desde + timedelta(days=1)
-    while ocupadas.get(dia, 0) + horas > limite:
+    while dia <= hasta:
+        if ocupadas.get(dia, 0) + horas <= limite:
+            return dia
         dia += timedelta(days=1)
-    return dia
+    return None

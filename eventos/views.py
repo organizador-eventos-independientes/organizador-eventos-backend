@@ -176,7 +176,11 @@ class EventoViewSet(viewsets.ModelViewSet):
             serializer = SubtareaSerializer(subtareas, many=True)
             return Response(serializer.data)
 
-        serializer = self.get_serializer(data=request.data)
+        # Con el evento en el contexto se valida que el plazo no lo pase.
+        serializer = self.get_serializer(
+            data=request.data,
+            context={**self.get_serializer_context(), 'evento': evento}
+        )
 
         if serializer.is_valid():
             serializer.save(evento=evento)
