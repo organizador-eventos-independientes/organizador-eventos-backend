@@ -467,7 +467,7 @@ class SobrecargaDiariaTests(APITestCase):
         self.assertEqual(self.reprogramar(self.dia_x).status_code, status.HTTP_200_OK)
 
     def test_error_de_validacion_no_guarda(self):
-        for extra in [{'horas_estimadas': '0'}, {'horas_estimadas': 'muchas'}]:
+        for extra in [{'horas_estimadas': '0'}, {'horas_estimadas': 'muchas'}, {'horas_estimadas': '1000'}]:
             with self.subTest(extra=extra):
                 res = self.reprogramar(self.dia_x, **extra)
 
@@ -477,6 +477,22 @@ class SobrecargaDiariaTests(APITestCase):
 
         self.proveedores.refresh_from_db()
         self.assertEqual(self.proveedores.plazo, timezone.localdate())
+
+    def test_subir_horas_al_reprogramar_cuenta_para_el_conflicto(self):
+        # Día vacío, pero con 7 h la gestión sola pasa del límite de 6 h.
+        res = self.reprogramar(self.dia_x, horas_estimadas='7')
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(res.data['detail'], 'Quedarías con 7h de gestión planificadas (límite 6h)')
+        self.proveedores.refresh_from_db()
+        self.assertEqual((self.proveedores.plazo, self.proveedores.horas_estimadas), (timezone.localdate(), 2))
+
+    def test_cambiar_fecha_y_horas_a_la_vez(self):
+        res = self.reprogramar(self.dia_x, horas_estimadas='3.5')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.proveedores.refresh_from_db()
+        self.assertEqual((self.proveedores.plazo, self.proveedores.horas_estimadas), (self.dia_x, Decimal('3.5')))
 
 
 class ConfiguracionTests(APITestCase):

@@ -135,8 +135,9 @@ class SubtareaSerializer(serializers.ModelSerializer):
 
 
 class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
-    # US-06: cambia la fecha objetivo; el resto de la gestión no se toca, salvo
-    # las horas estimadas si se envían (US-07: reducirlas para que quepan).
+    # US-06: cambia la fecha objetivo y, si se envían, las horas estimadas (el
+    # organizador las ajusta al reprogramar, o las reduce para que quepan en
+    # el día, US-07); el resto de la gestión no se toca.
     plazo = serializers.DateField(
         required=True,
         error_messages={
@@ -151,7 +152,11 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
         decimal_places=2,
         required=False,
         error_messages={
-            'invalid': 'Las horas estimadas deben ser un número válido.'
+            'invalid': 'Las horas estimadas deben ser un número válido.',
+            'null': 'Las horas estimadas deben ser un número válido.',
+            'max_digits': 'Las horas estimadas no pueden superar 999.99.',
+            'max_whole_digits': 'Las horas estimadas no pueden superar 999.99.',
+            'max_decimal_places': 'Usa máximo 2 decimales (ej. 1.5).'
         }
     )
 
