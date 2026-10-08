@@ -282,3 +282,72 @@ class VistaHoyTests(APITestCase):
                 res = self.consultar(**filtros)
                 self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertIn(campo, res.data)
+
+
+class ReprogramarSubtareaTests(APITestCase):
+    """US-06: reprogramar una gestión logística."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.beto = User.objects.create_user(username='beto', password='clave-beto-123')
+        self.hoy = timezone.localdate()
+        self.gestion = Subtarea.objects.create(
+            evento=crear_evento(self.ana),
+            nombre='Confirmar catering',
+            plazo=self.hoy - timedelta(days=2),
+            horas_estimadas=3
+        )
+        self.url = f'/api/subtareas/{self.gestion.id}/reprogramar/'
+
+    def test_reprogramacion_exitosa_guarda_solo_la_nueva_fecha(self):
+        self.client.force_authenticate(self.ana)
+        nueva = self.hoy + timedelta(days=5)
+
+        res = self.client.patch(self.url, {'plazo': nueva.isoformat(), 'nombre': 'Otro nombre'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['id'], self.gestion.id)
+        self.assertEqual(res.data['plazo'], nueva.isoformat())
+        self.assertEqual(res.data['evento_titulo'], 'Boda Ana y Luis')
+        self.gestion.refresh_from_db()
+        self.assertEqual(self.gestion.plazo, nueva)
+        self.assertEqual(self.gestion.nombre, 'Confirmar catering')
+
+    def test_la_gestion_reprogramada_aparece_en_su_nuevo_grupo_de_hoy(self):
+        self.client.force_authenticate(self.ana)
+        antes = self.client.get('/api/subtareas/hoy/').data
+        self.assertEqual([s['id'] for s in antes['vencidas']], [self.gestion.id])
+
+        for dias, grupo in [(0, 'hoy'), (3, 'proximas')]:
+            with self.subTest(grupo=grupo):
+                self.client.patch(self.url, {'plazo': (self.hoy + timedelta(days=dias)).isoformat()})
+                despues = self.client.get('/api/subtareas/hoy/').data
+
+                for nombre in ['vencidas', 'hoy', 'proximas']:
+                    ids = [s['id'] for s in despues[nombre]]
+                    self.assertEqual(ids, [self.gestion.id] if nombre == grupo else [])
+
+    def test_fecha_no_valida_no_reprograma(self):
+        self.client.force_authenticate(self.ana)
+        ayer = (self.hoy - timedelta(days=1)).isoformat()
+
+        for datos in [{}, {'plazo': ''}, {'plazo': '31/12/2030'}, {'plazo': '2030-02-30'}, {'plazo': ayer}]:
+            with self.subTest(datos=datos):
+                res = self.client.patch(self.url, datos)
+
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(res.data['detail'], 'No se pudo reprogramar.')
+                self.assertIn('plazo', res.data)
+
+        self.gestion.refresh_from_db()
+        self.assertEqual(self.gestion.plazo, self.hoy - timedelta(days=2))
+
+    def test_no_se_reprograman_gestiones_ajenas_ni_sin_sesion(self):
+        datos = {'plazo': (self.hoy + timedelta(days=1)).isoformat()}
+
+        self.assertEqual(self.client.patch(self.url, datos).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.client.force_authenticate(self.beto)
+        self.assertEqual(self.client.patch(self.url, datos).status_code, status.HTTP_404_NOT_FOUND)
+
+        self.gestion.refresh_from_db()
+        self.assertEqual(self.gestion.plazo, self.hoy - timedelta(days=2))

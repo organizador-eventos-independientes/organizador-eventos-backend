@@ -19,6 +19,8 @@ from .serializers import (
     LoginRespuestaSerializer,
     LoginSerializer,
     RegistroSerializer,
+    ReprogramarSubtareaSerializer,
+    SubtareaHoySerializer,
     SubtareaSerializer,
 )
 
@@ -172,6 +174,39 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         if getattr(self, 'swagger_fake_view', False):  # generación del esquema OpenAPI
             return Subtarea.objects.none()
         return Subtarea.objects.filter(evento__organizador=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == 'reprogramar':
+            return ReprogramarSubtareaSerializer
+        return SubtareaSerializer
+
+    @extend_schema(
+        request=ReprogramarSubtareaSerializer,
+        responses={
+            200: SubtareaHoySerializer,
+            400: OpenApiResponse(
+                description='No se pudo reprogramar: la fecha objetivo no es válida.'
+            ),
+            404: OpenApiResponse(
+                description='La gestión no existe o es de otro organizador.'
+            ),
+        },
+    )
+    @action(detail=True, methods=['patch'], url_path='reprogramar')
+    def reprogramar(self, request, pk=None):
+        # US-06: cambia solo la fecha objetivo. Devuelve la gestión con la misma
+        # forma que en /hoy para que el frontend la mueva a su nuevo grupo.
+        subtarea = self.get_object()
+        serializer = self.get_serializer(subtarea, data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {'detail': 'No se pudo reprogramar.', **serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer.save()
+        return Response(SubtareaHoySerializer(subtarea).data)
 
     @extend_schema(
         parameters=[HoyFiltrosSerializer],

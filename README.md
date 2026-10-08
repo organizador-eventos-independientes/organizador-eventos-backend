@@ -18,6 +18,7 @@ API REST desarrollada para gestionar eventos y sus gestiones logísticas dentro 
 * Crear gestiones logísticas asociadas a un evento.
 * Consultar las gestiones de un evento.
 * Actualizar y eliminar gestiones logísticas.
+* Reprogramar la fecha objetivo de una gestión logística (US-06).
 * Validar los datos recibidos por la API.
 * Validar que las horas estimadas de una gestión sean mayores que 0.
 * Registrarse, iniciar y cerrar sesión con usuario y contraseña (US-11); cada organizador solo ve sus propios eventos y gestiones.
@@ -123,7 +124,20 @@ GET    /api/subtareas/{id}/
 PUT    /api/subtareas/{id}/
 PATCH  /api/subtareas/{id}/
 DELETE /api/subtareas/{id}/
+PATCH  /api/subtareas/{id}/reprogramar/
 ```
+
+### Reprogramar una gestión (US-06)
+
+```text
+PATCH  /api/subtareas/{id}/reprogramar/    { "plazo": "YYYY-MM-DD" }
+```
+
+Cambia solo la fecha objetivo; si se envían otros campos, se ignoran. La nueva fecha debe ser válida y no anterior a hoy (sí se puede mover una gestión que ya está vencida).
+
+* `200`: la gestión con la misma forma que en la vista "Hoy" (`{ id, evento, evento_titulo, nombre, plazo, horas_estimadas }`). Desde ese momento `GET /api/subtareas/hoy/` la devuelve en el grupo que le corresponde a su nueva fecha.
+* `400`: `{ "detail": "No se pudo reprogramar.", "plazo": ["motivo"] }`. La fecha guardada no cambia.
+* `404`: la gestión no existe o es de otro organizador.
 
 ### Vista "Hoy" (US-04 y US-05)
 

@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model, password_validation
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError
-from django.utils import translation
+from django.utils import timezone, translation
 from rest_framework import serializers
 from .models import Evento, Subtarea
 
@@ -123,6 +123,30 @@ class SubtareaSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError(
                 'Las horas estimadas deben ser mayores que 0.'
+            )
+        return value
+
+
+class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
+    # US-06: solo cambia la fecha objetivo; el resto de la gestión no se toca.
+    plazo = serializers.DateField(
+        required=True,
+        error_messages={
+            'required': 'La nueva fecha objetivo es obligatoria.',
+            'null': 'La nueva fecha objetivo es obligatoria.',
+            'invalid': 'La fecha objetivo debe tener un formato de fecha válido.'
+        }
+    )
+
+    class Meta:
+        model = Subtarea
+        fields = ['plazo']
+
+    def validate_plazo(self, value):
+        # Se puede mover una gestión vencida, pero no a una fecha ya pasada.
+        if value < timezone.localdate():
+            raise serializers.ValidationError(
+                'La fecha objetivo no puede ser anterior a hoy.'
             )
         return value
 
