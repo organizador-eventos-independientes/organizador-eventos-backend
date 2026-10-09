@@ -4,7 +4,8 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError
 from django.utils import timezone, translation
 from rest_framework import serializers
-from .carga import a_horas, a_minutos
+from rest_framework.settings import api_settings
+from .carga import a_horas, a_minutos, limite_bajo_lo_planificado, sobrecarga_al_guardar
 from .models import (
     LIMITE_FUERA_DE_RANGO,
     LIMITE_HORAS_MAXIMO,
@@ -147,17 +148,32 @@ class SubtareaSerializer(serializers.ModelSerializer):
         return validar_horas_estimadas(value)
 
     def validate(self, attrs):
-        # El plazo no puede ser posterior a la fecha del evento (el mismo día
-        # sí). Al crearla desde /eventos/:id/subtareas/ el evento llega en el
+        # Al crearla desde /eventos/:id/subtareas/ el evento llega en el
         # contexto; al editarla, se usa lo que ya tiene si no se cambia.
-        if 'plazo' not in attrs and 'evento' not in attrs:
-            return attrs
         evento = self.context.get('evento') or attrs.get('evento') or getattr(self.instance, 'evento', None)
         plazo = attrs.get('plazo') or getattr(self.instance, 'plazo', None)
-        if evento is not None and plazo is not None and plazo > evento.fecha:
+        horas = attrs.get('horas_estimadas') or getattr(self.instance, 'horas_estimadas', None)
+        if evento is None or plazo is None:
+            return attrs
+
+        # El plazo no puede ser posterior a la fecha del evento (el mismo día sí).
+        if ('plazo' in attrs or 'evento' in attrs) and plazo > evento.fecha:
             raise serializers.ValidationError({
                 'plazo': f'El plazo no puede ser posterior a la fecha del evento ({evento.fecha:%d/%m/%Y}).'
             })
+
+        # Con esta gestión, ese día no puede pasar del límite diario (US-07 y
+        # US-12), sumando todos los eventos del organizador. Al editar solo se
+        # revisa si cambian el plazo o las horas: cambiar el nombre no.
+        cambia_la_carga = self.instance is None or any(
+            campo in attrs and attrs[campo] != getattr(self.instance, campo)
+            for campo in ('plazo', 'horas_estimadas')
+        )
+        if cambia_la_carga and horas is not None and evento.organizador_id is not None:
+            errores = sobrecarga_al_guardar(evento.organizador, self.instance, plazo, horas)
+            if errores:
+                general = errores.pop('general')
+                raise serializers.ValidationError({api_settings.NON_FIELD_ERRORS_KEY: [general], **errores})
         return attrs
 
 
@@ -307,6 +323,10 @@ class ConfiguracionSerializer(serializers.ModelSerializer):
     def validate_limite_horas_diarias(self, value):
         if not LIMITE_HORAS_MINIMO <= value <= LIMITE_HORAS_MAXIMO:
             raise serializers.ValidationError(LIMITE_FUERA_DE_RANGO)
+        # Tampoco puede quedar por debajo de las horas que ya tiene algún día.
+        mensaje = limite_bajo_lo_planificado(self.instance.organizador, value)
+        if mensaje:
+            raise serializers.ValidationError(mensaje)
         return value
 
 

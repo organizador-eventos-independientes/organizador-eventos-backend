@@ -2,6 +2,7 @@ from datetime import date, time, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -606,6 +607,88 @@ class ConfiguracionTests(APITestCase):
                 res = self.client.patch(f'/api/subtareas/{gestion.id}/reprogramar/', {'plazo': dia.isoformat()})
                 self.assertEqual(res.status_code, esperado)
 
+    def gestiones(self, usuario, *por_dia):
+        # por_dia: (días desde hoy, horas) de cada gestión.
+        evento = crear_evento(usuario)
+        for dias, horas in por_dia:
+            Subtarea.objects.create(
+                evento=evento, nombre='Gestión', plazo=timezone.localdate() + timedelta(days=dias),
+                horas_estimadas=horas
+            )
+
+    def test_no_baja_de_las_horas_ya_planificadas_en_un_dia(self):
+        # Límite 6 h y un día con 4 h + 2 h = 6 h: no se puede bajar a 2 h.
+        self.gestiones(self.ana, (3, 4), (3, 2))
+        dia = timezone.localdate() + timedelta(days=3)
+
+        res = self.guardar(self.ana, '2')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['limite_horas_diarias'], [
+            f'No puedes cambiar el límite a 2h: el {dia:%d/%m/%Y} ya tienes 6h de gestión planificadas. '
+            'Reprograma o reduce esas gestiones primero.'
+        ])
+        # No se guardó nada: sigue el valor por defecto.
+        self.assertTrue(self.limite(self.ana)['por_defecto'])
+
+    def test_cualquier_limite_por_debajo_de_algun_dia_se_rechaza(self):
+        self.guardar(self.ana, '8')
+        self.gestiones(self.ana, (1, '5.5'))
+
+        for valor in ['1', '3', '5', '5.49']:
+            with self.subTest(valor=valor):
+                self.assertEqual(self.guardar(self.ana, valor).status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.ana.configuracion.limite_horas_diarias, 8)
+
+        # Justo lo planificado o más sí se puede.
+        for valor in ['5.5', '7', '16']:
+            with self.subTest(valor=valor):
+                self.assertEqual(self.guardar(self.ana, valor).status_code, status.HTTP_200_OK)
+
+    def test_cuenta_todos_los_dias_y_todos_los_eventos(self):
+        # Un día vencido (3 h), hoy (2 h + 2 h de otro evento) y uno próximo (1 h).
+        self.gestiones(self.ana, (-2, 3), (0, 2), (6, 1))
+        self.gestiones(self.ana, (0, 2))
+        hoy = timezone.localdate()
+        vencido = hoy - timedelta(days=2)
+
+        res = self.guardar(self.ana, '1.5')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['limite_horas_diarias'], [
+            f'No puedes cambiar el límite a 1:30h: ya tienes más horas de gestión planificadas los días '
+            f'{vencido:%d/%m/%Y} (3h), {hoy:%d/%m/%Y} (4h). Reprograma o reduce esas gestiones primero.'
+        ])
+
+    def test_con_muchos_dias_nombra_los_tres_primeros(self):
+        self.gestiones(self.ana, *[(dias, 3) for dias in range(1, 6)])
+
+        mensaje = self.guardar(self.ana, '2').data['limite_horas_diarias'][0]
+
+        self.assertIn('y 2 días más.', mensaje)
+        self.assertEqual(mensaje.count('(3h)'), 3)
+
+    def test_suma_en_minutos_exactos(self):
+        # Tres gestiones de 0:40 suman 2 h justas: un límite de 2 h cabe.
+        self.gestiones(self.ana, (2, '0.67'), (2, '0.67'), (2, '0.67'))
+
+        self.assertEqual(self.guardar(self.ana, '2').status_code, status.HTTP_200_OK)
+
+    def test_las_gestiones_de_otros_no_cuentan(self):
+        self.gestiones(self.beto, (2, 10))
+
+        self.assertEqual(self.guardar(self.ana, '1').status_code, status.HTTP_200_OK)
+        self.assertEqual(self.guardar(self.beto, '9').status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_desde_admin_rige_la_misma_regla(self):
+        self.gestiones(self.ana, (1, 5))
+
+        with self.assertRaises(DjangoValidationError) as error:
+            ConfiguracionOrganizador(organizador=self.ana, limite_horas_diarias=Decimal('4')).full_clean()
+        self.assertIn('No puedes cambiar el límite a 4h', error.exception.message_dict['limite_horas_diarias'][0])
+
+        ConfiguracionOrganizador(organizador=self.ana, limite_horas_diarias=Decimal('5')).full_clean()
+
     def test_exige_sesion(self):
         for res in [
             self.client.get('/api/configuracion/'),
@@ -724,3 +807,109 @@ class PlazoDentroDelEventoTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
         self.assertIsNone(res.data['conflicto']['siguiente_dia_disponible'])
+
+
+class LimiteDiarioAlCrearYEditarTests(APITestCase):
+    """Crear o editar una gestión tampoco puede dejar un día por encima del
+    límite diario (US-07 y US-12), sumando todos los eventos del organizador."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.boda = crear_evento(self.ana)
+        self.feria = crear_evento(self.ana, titulo='Feria del libro')
+        self.dia = timezone.localdate() + timedelta(days=5)
+        self.fecha = f'{self.dia:%d/%m/%Y}'
+
+    def gestion(self, horas, plazo=None, evento=None, nombre='Reservar salón'):
+        return Subtarea.objects.create(
+            evento=evento or self.boda, nombre=nombre, plazo=plazo or self.dia, horas_estimadas=horas
+        )
+
+    def crear(self, horas, plazo=None, url=None, **extra):
+        datos = {'nombre': 'Buscar proveedores', 'plazo': (plazo or self.dia).isoformat(),
+                 'horas_estimadas': horas, **extra}
+        return self.client.post(url or f'/api/eventos/{self.boda.id}/subtareas/', datos)
+
+    def editar(self, gestion, **datos):
+        return self.client.patch(f'/api/subtareas/{gestion.id}/', datos)
+
+    def test_crear_hasta_el_limite_se_guarda(self):
+        # 4 h de otro evento + 2 h = 6 h justas.
+        self.gestion(4, evento=self.feria)
+
+        self.assertEqual(self.crear('2').status_code, status.HTTP_201_CREATED)
+
+    def test_crear_por_encima_del_limite_no_guarda(self):
+        self.gestion(4, evento=self.feria)
+
+        for res in [self.crear('3'), self.crear('3', url='/api/subtareas/', evento=self.boda.id)]:
+            with self.subTest(url=res.wsgi_request.path):
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(res.data['non_field_errors'], [
+                    f'Quedarías con 7h de gestión planificadas el {self.fecha} (límite 6h): '
+                    'ese día ya tienes 4h. Reduce las horas a 2h o elige otro plazo.'
+                ])
+                self.assertEqual(res.data['horas_estimadas'], ['Ese día solo caben 2h más.'])
+
+        self.assertEqual(Subtarea.objects.count(), 1)
+
+    def test_crear_en_un_dia_lleno_marca_el_plazo(self):
+        self.gestion(6)
+
+        res = self.crear('0.25')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['plazo'], ['Ese día ya llegó a tu límite diario.'])
+        self.assertIn('no cabe nada más. Elige otro plazo.', res.data['non_field_errors'][0])
+
+    def test_una_gestion_sola_por_encima_del_limite(self):
+        res = self.crear('7')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['horas_estimadas'], ['Pasa de tu límite diario de 6h.'])
+        self.assertIn('esta gestión sola pasa de tu límite diario', res.data['non_field_errors'][0])
+
+    def test_usa_el_limite_del_organizador_y_solo_sus_gestiones(self):
+        ConfiguracionOrganizador.objects.create(organizador=self.ana, limite_horas_diarias=3)
+        beto = User.objects.create_user(username='beto', password='clave-beto-123')
+        self.gestion(5, evento=crear_evento(beto))
+
+        self.assertEqual(self.crear('3').status_code, status.HTTP_201_CREATED)
+        self.assertEqual(self.crear('0.25').status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_editar_las_horas_no_cuenta_la_misma_gestion_dos_veces(self):
+        # 2 h propias + 3 h de otra: subirla a 3 h deja el día en 6 h justas.
+        gestion = self.gestion(2)
+        self.gestion(3, evento=self.feria)
+
+        self.assertEqual(self.editar(gestion, horas_estimadas='3').status_code, status.HTTP_200_OK)
+
+        res = self.editar(gestion, horas_estimadas='3.5')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['horas_estimadas'], ['Ese día solo caben 3h más.'])
+        gestion.refresh_from_db()
+        self.assertEqual(gestion.horas_estimadas, 3)
+
+    def test_editar_el_plazo_a_un_dia_sin_espacio_no_guarda(self):
+        otro_dia = self.dia + timedelta(days=1)
+        self.gestion(5, plazo=otro_dia, evento=self.feria)
+        gestion = self.gestion(2)
+
+        res = self.editar(gestion, plazo=otro_dia.isoformat())
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['horas_estimadas'], ['Ese día solo caben 1h más.'])
+        gestion.refresh_from_db()
+        self.assertEqual(gestion.plazo, self.dia)
+
+    def test_editar_solo_el_nombre_no_revisa_el_limite(self):
+        # Un día que ya pasaba del límite (datos de antes de esta regla).
+        gestion = self.gestion(4)
+        self.gestion(4, evento=self.feria)
+
+        res = self.editar(
+            gestion, nombre='Reservar salón grande', plazo=self.dia.isoformat(), horas_estimadas='4'
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)

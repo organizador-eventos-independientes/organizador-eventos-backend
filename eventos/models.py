@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
@@ -67,6 +68,21 @@ class ConfiguracionOrganizador(models.Model):
             MaxValueValidator(LIMITE_HORAS_MAXIMO, LIMITE_FUERA_DE_RANGO),
         ]
     )
+
+    def clean(self):
+        # Desde /admin/ rige lo mismo que en la API: el límite no puede quedar
+        # por debajo de las horas ya planificadas en algún día. (carga.py
+        # importa este módulo, por eso se importa aquí.)
+        from .carga import limite_bajo_lo_planificado
+
+        limite = self.limite_horas_diarias
+        if self.organizador_id is None or limite is None:
+            return
+        if not LIMITE_HORAS_MINIMO <= limite <= LIMITE_HORAS_MAXIMO:
+            return  # ya lo marcan los validadores del campo
+        mensaje = limite_bajo_lo_planificado(self.organizador, limite)
+        if mensaje:
+            raise ValidationError({'limite_horas_diarias': mensaje})
 
     def __str__(self):
         return f'Configuración de {self.organizador}'

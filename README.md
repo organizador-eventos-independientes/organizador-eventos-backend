@@ -132,6 +132,15 @@ El `plazo` de una gestión no puede ser posterior a la fecha de su evento (el mi
 
 `horas_estimadas` son horas y minutos de reloj guardados con dos decimales (2:45 = `2.75`, 2:20 = `2.33`): deben ser mayores que 0 y corresponder a minutos exactos; un valor como `2.01`, que no es ningún minuto, responde `400`. Las sumas del límite diario (US-07) se hacen en minutos, y el mensaje del conflicto muestra las horas de reloj ("Quedarías con 7:30h de gestión planificadas (límite 6h)").
 
+Crear o editar una gestión tampoco puede dejar su día por encima del **límite diario** del organizador (US-12), sumando sus gestiones de todos los eventos (al editar, la misma no se cuenta dos veces; llegar justo al límite está permitido). Si pasa, no se guarda y responde `400` con un mensaje general y otro corto en el campo que conviene cambiar: `horas_estimadas` si aún cabe algo ese día o si la gestión sola pasa del límite, `plazo` si el día ya está lleno. Al editar solo se revisa si cambian el plazo o las horas (cambiar el nombre no).
+
+```json
+{
+  "non_field_errors": ["Quedarías con 7h de gestión planificadas el 13/10/2026 (límite 6h): ese día ya tienes 4h. Reduce las horas a 2h o elige otro plazo."],
+  "horas_estimadas": ["Ese día solo caben 2h más."]
+}
+```
+
 ### Reprogramar una gestión (US-06)
 
 ```text
@@ -180,7 +189,15 @@ PATCH  /api/configuracion/    { "limite_horas_diarias": 4 }
 
 Cada organizador tiene su propio límite de horas de gestión por día, y US-07 usa siempre el del organizador autenticado. Si nunca lo guardó vale 6 h y `por_defecto` es `true` (consultarlo no guarda nada).
 
-El límite debe estar **entre 1 y 16 horas**, ambos incluidos, con máximo 2 decimales. Si no lo está, no se guarda y responde `400`: `{ "limite_horas_diarias": ["El límite debe estar entre 1 y 16 horas."] }`. El mismo rango se aplica al cambiarlo desde `/admin/`.
+El límite debe estar **entre 1 y 16 horas**, ambos incluidos, con máximo 2 decimales. Si no lo está, no se guarda y responde `400`: `{ "limite_horas_diarias": ["El límite debe estar entre 1 y 16 horas."] }`.
+
+Tampoco puede quedar **por debajo de las horas ya planificadas en ningún día**: se suman, en minutos, las gestiones del organizador de todos sus eventos para cada fecha (cualquier día, también los vencidos), y si algún día pasa del nuevo límite no se guarda y responde `400` nombrando esos días (los tres primeros y cuántos más). Llegar justo al límite está permitido. Por ejemplo, con un día de 4 h + 2 h no se puede bajar de 6 h a 2 h:
+
+```json
+{ "limite_horas_diarias": ["No puedes cambiar el límite a 2h: el 13/10/2026 ya tienes 6h de gestión planificadas. Reprograma o reduce esas gestiones primero."] }
+```
+
+Las dos reglas se aplican también al cambiarlo desde `/admin/`.
 
 ### Vista "Hoy" (US-04 y US-05)
 
