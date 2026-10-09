@@ -130,6 +130,8 @@ PATCH  /api/subtareas/{id}/reprogramar/
 
 El `plazo` de una gestión no puede ser posterior a la fecha de su evento (el mismo día sí). Si lo es, responde `400` con `{ "plazo": ["El plazo no puede ser posterior a la fecha del evento (DD/MM/AAAA)."] }`.
 
+`horas_estimadas` son horas y minutos de reloj guardados con dos decimales (2:45 = `2.75`, 2:20 = `2.33`): deben ser mayores que 0 y corresponder a minutos exactos; un valor como `2.01`, que no es ningún minuto, responde `400`. Las sumas del límite diario (US-07) se hacen en minutos, y el mensaje del conflicto muestra las horas de reloj ("Quedarías con 7:30h de gestión planificadas (límite 6h)").
+
 ### Reprogramar una gestión (US-06)
 
 ```text

@@ -4,6 +4,7 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError
 from django.utils import timezone, translation
 from rest_framework import serializers
+from .carga import a_horas, a_minutos
 from .models import (
     LIMITE_FUERA_DE_RANGO,
     LIMITE_HORAS_MAXIMO,
@@ -14,6 +15,22 @@ from .models import (
 )
 
 User = get_user_model()
+
+
+def validar_horas_estimadas(value):
+    # Son horas y minutos de reloj guardados con dos decimales (2:45 = 2.75):
+    # deben ser más de 0 y corresponder a minutos exactos (2.33 = 2:20 sí;
+    # 2.01, que no es ningún minuto, no).
+    if value <= 0:
+        raise serializers.ValidationError(
+            'Las horas estimadas deben ser mayores que 0.'
+        )
+    if a_horas(a_minutos(value)) != value:
+        raise serializers.ValidationError(
+            'Las horas estimadas deben ser horas y minutos exactos (ej. 2:45 = 2.75).'
+        )
+    return value
+
 
 class EventoSerializer(serializers.ModelSerializer):
     titulo = serializers.CharField(
@@ -127,11 +144,7 @@ class SubtareaSerializer(serializers.ModelSerializer):
         return fields
 
     def validate_horas_estimadas(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                'Las horas estimadas deben ser mayores que 0.'
-            )
-        return value
+        return validar_horas_estimadas(value)
 
     def validate(self, attrs):
         # El plazo no puede ser posterior a la fecha del evento (el mismo día
@@ -193,11 +206,7 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
         return value
 
     def validate_horas_estimadas(self, value):
-        if value <= 0:
-            raise serializers.ValidationError(
-                'Las horas estimadas deben ser mayores que 0.'
-            )
-        return value
+        return validar_horas_estimadas(value)
 
 
 class HoyFiltrosSerializer(serializers.Serializer):

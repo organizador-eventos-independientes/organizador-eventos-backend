@@ -1,7 +1,6 @@
+from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
-
-from django.db.models import Sum
 
 from .models import ConfiguracionOrganizador, Subtarea
 
@@ -15,9 +14,23 @@ def configuracion_de(organizador):
     )
 
 
-def horas_texto(horas):
-    # 7.00 -> "7", 7.50 -> "7,5"
-    return format(Decimal(horas).normalize(), 'f').replace('.', ',')
+# Las horas se guardan con dos decimales, pero son horas y minutos de reloj
+# (2:45 = 2.75; 2:20 = 2.33). Las cuentas se hacen en minutos enteros para que
+# los redondeos no se acumulen (tres gestiones de 0:40 suman 2 h, no 2,01).
+def a_minutos(horas):
+    # 2.75 -> 165; 2.33 -> 140
+    return round(Decimal(horas) * 60)
+
+
+def a_horas(minutos):
+    # 165 -> 2.75; 140 -> 2.33
+    return (Decimal(minutos) / 60).quantize(Decimal('0.01'))
+
+
+def duracion_texto(minutos):
+    # 420 -> "7"; 450 -> "7:30"
+    horas, resto = divmod(minutos, 60)
+    return f'{horas}:{resto:02d}' if resto else str(horas)
 
 
 def detectar_sobrecarga(organizador, subtarea, plazo, horas):
@@ -32,47 +45,45 @@ def detectar_sobrecarga(organizador, subtarea, plazo, horas):
         .order_by('horas_estimadas', 'nombre')
     )
     # Un día sin gestiones empieza en 0 h.
-    planificadas = sum((s.horas_estimadas for s in del_dia), Decimal('0'))
-    total = planificadas + horas
-    if total <= limite:
+    limite_min = a_minutos(limite)
+    planificadas_min = sum(a_minutos(s.horas_estimadas) for s in del_dia)
+    gestion_min = a_minutos(horas)
+    total_min = planificadas_min + gestion_min
+    if total_min <= limite_min:
         return None
 
     return {
         'mensaje': (
-            f'Quedarías con {horas_texto(total)}h de gestión planificadas '
-            f'(límite {horas_texto(limite)}h)'
+            f'Quedarías con {duracion_texto(total_min)}h de gestión planificadas '
+            f'(límite {duracion_texto(limite_min)}h)'
         ),
         'fecha': plazo,
         'limite': limite,
-        'planificadas': planificadas,
+        'planificadas': a_horas(planificadas_min),
         'horas_gestion': horas,
-        'total': total,
+        'total': a_horas(total_min),
         # Para "reducir horas": lo máximo que cabe ese día.
-        'horas_disponibles': max(limite - planificadas, Decimal('0')),
+        'horas_disponibles': a_horas(max(limite_min - planificadas_min, 0)),
         'siguiente_dia_disponible': siguiente_dia_con_espacio(
-            otras, plazo, horas, limite, subtarea.evento.fecha
+            otras, plazo, gestion_min, limite_min, subtarea.evento.fecha
         ),
         'gestiones_del_dia': del_dia,
     }
 
 
-def siguiente_dia_con_espacio(otras, desde, horas, limite, hasta):
+def siguiente_dia_con_espacio(otras, desde, minutos, limite_min, hasta):
     # Para "posponer": el primer día después de `desde` en el que la gestión
-    # cabe, sin pasar de `hasta` (la fecha del evento). Si sola ya supera el
-    # límite o no queda espacio antes del evento, ningún día sirve.
-    if horas > limite:
+    # (`minutos`) cabe, sin pasar de `hasta` (la fecha del evento). Si sola ya
+    # supera el límite o no queda espacio antes del evento, ningún día sirve.
+    if minutos > limite_min:
         return None
 
-    ocupadas = dict(
-        otras.filter(plazo__gt=desde)
-        .order_by()
-        .values('plazo')
-        .annotate(horas=Sum('horas_estimadas'))
-        .values_list('plazo', 'horas')
-    )
+    ocupados = defaultdict(int)
+    for dia, horas in otras.filter(plazo__gt=desde, plazo__lte=hasta).values_list('plazo', 'horas_estimadas'):
+        ocupados[dia] += a_minutos(horas)
     dia = desde + timedelta(days=1)
     while dia <= hasta:
-        if ocupadas.get(dia, 0) + horas <= limite:
+        if ocupados[dia] + minutos <= limite_min:
             return dia
         dia += timedelta(days=1)
     return None

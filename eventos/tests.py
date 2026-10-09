@@ -443,12 +443,34 @@ class SobrecargaDiariaTests(APITestCase):
         self.assertEqual(Decimal(res.data['conflicto']['horas_disponibles']), 6)
         self.assertIsNone(res.data['conflicto']['siguiente_dia_disponible'])
 
-    def test_horas_con_decimales_en_el_mensaje(self):
+    def test_horas_y_minutos_en_el_mensaje(self):
         self.gestion('Reservar salón', self.dia_x, '5.5')
 
         res = self.reprogramar(self.dia_x)
 
-        self.assertEqual(res.data['detail'], 'Quedarías con 7,5h de gestión planificadas (límite 6h)')
+        # 5:30 + 2:00 = 7:30, en horas de reloj.
+        self.assertEqual(res.data['detail'], 'Quedarías con 7:30h de gestión planificadas (límite 6h)')
+
+    def test_suma_en_minutos_exactos(self):
+        # Tres gestiones de 0:40 (0.67 h cada una) suman 2:00, no 2,01 h: con
+        # las 4 h que se mueven, el día llega justo a 6 h y no hay conflicto.
+        for nombre in ['Llamar al DJ', 'Llamar al florista', 'Llamar al fotógrafo']:
+            self.gestion(nombre, self.dia_x, '0.67')
+
+        res = self.reprogramar(self.dia_x, horas_estimadas='4')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_horas_disponibles_en_minutos(self):
+        # Ese día ya hay 3:40 (3.67 h): para no pasar de 6 h caben 2:20 (2.33 h).
+        self.gestion('Reservar salón', self.dia_x, '3.67')
+
+        conflicto = self.reprogramar(self.dia_x, horas_estimadas='3').data['conflicto']
+        reducida = self.reprogramar(self.dia_x, horas_estimadas=conflicto['horas_disponibles'])
+
+        self.assertEqual(Decimal(conflicto['horas_disponibles']), Decimal('2.33'))
+        self.assertEqual(Decimal(conflicto['planificadas']), Decimal('3.67'))
+        self.assertEqual(reducida.status_code, status.HTTP_200_OK)
 
     def test_usa_el_limite_definido_por_el_organizador(self):
         ConfiguracionOrganizador.objects.create(organizador=self.ana, limite_horas_diarias=8)
@@ -467,7 +489,9 @@ class SobrecargaDiariaTests(APITestCase):
         self.assertEqual(self.reprogramar(self.dia_x).status_code, status.HTTP_200_OK)
 
     def test_error_de_validacion_no_guarda(self):
-        for extra in [{'horas_estimadas': '0'}, {'horas_estimadas': 'muchas'}, {'horas_estimadas': '1000'}]:
+        # 2.01 h no corresponde a ningún minuto de reloj (2:01 = 2.02).
+        for extra in [{'horas_estimadas': '0'}, {'horas_estimadas': 'muchas'}, {'horas_estimadas': '1000'},
+                      {'horas_estimadas': '2.01'}]:
             with self.subTest(extra=extra):
                 res = self.reprogramar(self.dia_x, **extra)
 
@@ -657,6 +681,20 @@ class PlazoDentroDelEventoTests(APITestCase):
         res = self.client.patch(f'/api/subtareas/{gestion.id}/', {'nombre': 'Reservar salón grande'})
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_horas_estimadas_en_minutos_exactos(self):
+        # 2:45 = 2.75 y 2:01 = 2.02 son válidas; 2.01 h no es ningún minuto.
+        for horas, esperado in [('2.75', status.HTTP_201_CREATED), ('2.02', status.HTTP_201_CREATED),
+                                ('2.01', status.HTTP_400_BAD_REQUEST)]:
+            with self.subTest(horas=horas):
+                res = self.crear(self.dia_evento, horas_estimadas=horas)
+
+                self.assertEqual(res.status_code, esperado)
+                if esperado == status.HTTP_400_BAD_REQUEST:
+                    self.assertEqual(
+                        res.data['horas_estimadas'],
+                        ['Las horas estimadas deben ser horas y minutos exactos (ej. 2:45 = 2.75).']
+                    )
 
     def test_reprogramar_hasta_el_dia_del_evento(self):
         gestion = self.gestion()
