@@ -14,6 +14,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
 from .carga import configuracion_de, detectar_sobrecarga
 from .models import Evento, Subtarea
 from .serializers import (
+    ActualizarEstadoSubtareaSerializer,
     ConfiguracionSerializer,
     ConflictoRespuestaSerializer,
     ConflictoSobrecargaSerializer,
@@ -22,6 +23,7 @@ from .serializers import (
     HoyRespuestaSerializer,
     LoginRespuestaSerializer,
     LoginSerializer,
+    ProgresoEventoSerializer,
     RegistroSerializer,
     ReprogramarSubtareaSerializer,
     SubtareaHoySerializer,
@@ -193,7 +195,37 @@ class EventoViewSet(viewsets.ModelViewSet):
             serializer.errors,
             status=status.HTTP_400_BAD_REQUEST
         )
+    
+    @extend_schema(
+        responses={
+            200: ProgresoEventoSerializer,
+            404: OpenApiResponse(
+                description='El evento no existe o pertenece a otro organizador.'
+            ),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='progreso')
+    def progreso(self, request, pk=None):
+        evento = self.get_object()
+        subtareas = evento.subtareas.all()
 
+        total = subtareas.count()
+        hechas = subtareas.filter(
+            estado=Subtarea.ESTADO_HECHA
+        ).count()
+
+        porcentaje = round((hechas / total) * 100, 2) if total else 0.0
+
+        datos = {
+            'evento_id': evento.id,
+            'total_gestiones': total,
+            'gestiones_hechas': hechas,
+            'porcentaje': porcentaje,
+        }
+
+        serializer = ProgresoEventoSerializer(data=datos)
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.data)
 
 class SubtareaViewSet(viewsets.ModelViewSet):
     queryset = Subtarea.objects.all()
@@ -208,6 +240,31 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         if self.action == 'reprogramar':
             return ReprogramarSubtareaSerializer
         return SubtareaSerializer
+    
+    @extend_schema(
+        request=ActualizarEstadoSubtareaSerializer,
+        responses={
+            200: SubtareaHoySerializer,
+            400: OpenApiResponse(
+                description='El estado o la nota enviados no son válidos.'
+            ),
+            404: OpenApiResponse(
+                description='La gestión no existe o pertenece a otro organizador.'
+            ),
+        },
+    )
+    @action(detail=True, methods=['patch'], url_path='estado')
+    def actualizar_estado(self, request, pk=None):
+        subtarea = self.get_object()
+        serializer = ActualizarEstadoSubtareaSerializer(
+            subtarea,
+            data=request.data,
+            partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(SubtareaHoySerializer(subtarea).data)
 
     @extend_schema(
         request=ReprogramarSubtareaSerializer,

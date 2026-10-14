@@ -36,7 +36,18 @@ class Evento(models.Model):
     def __str__(self):
         return self.titulo
 
+
 class Subtarea(models.Model):
+    ESTADO_PENDIENTE = 'Pendiente'
+    ESTADO_HECHA = 'Hecha'
+    ESTADO_POSPUESTA = 'Pospuesta'
+
+    ESTADOS = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_HECHA, 'Hecha'),
+        (ESTADO_POSPUESTA, 'Pospuesta'),
+    ]
+
     evento = models.ForeignKey(
         Evento,
         on_delete=models.CASCADE,
@@ -44,11 +55,20 @@ class Subtarea(models.Model):
     )
     nombre = models.CharField(max_length=200)
     plazo = models.DateField()
-    horas_estimadas = models.DecimalField(max_digits=5, decimal_places=2)
+    horas_estimadas = models.DecimalField(
+        max_digits=5,
+        decimal_places=2
+    )
+
+    estado = models.CharField(
+        max_length=20,
+        choices=ESTADOS,
+        default=ESTADO_PENDIENTE
+    )
+    nota_estado = models.TextField(blank=True, default='')
 
     def __str__(self):
         return self.nombre
-
 
 class ConfiguracionOrganizador(models.Model):
     # Límite de horas de gestión por día, sumando todos los eventos del

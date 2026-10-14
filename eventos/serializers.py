@@ -225,6 +225,22 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
         return validar_horas_estimadas(value)
 
 
+class ActualizarEstadoSubtareaSerializer(serializers.ModelSerializer):
+    estado = serializers.ChoiceField(
+        choices=Subtarea.ESTADOS,
+        required=True
+    )
+    nota_estado = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default=''
+    )
+
+    class Meta:
+        model = Subtarea
+        fields = ['estado', 'nota_estado']
+
+
 class HoyFiltrosSerializer(serializers.Serializer):
     evento = serializers.PrimaryKeyRelatedField(
         queryset=Evento.objects.none(),
@@ -267,7 +283,16 @@ class SubtareaHoySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Subtarea
-        fields = ['id', 'evento', 'evento_titulo', 'nombre', 'plazo', 'horas_estimadas']
+        fields = [
+            'id',
+            'evento',
+            'evento_titulo',
+            'nombre',
+            'plazo',
+            'horas_estimadas',
+            'estado',
+            'nota_estado',
+        ]
 
 
 class HoyRespuestaSerializer(serializers.Serializer):
@@ -416,3 +441,10 @@ class UsuarioSesionSerializer(serializers.Serializer):
 class LoginRespuestaSerializer(serializers.Serializer):
     token = serializers.CharField()
     usuario = UsuarioSesionSerializer()
+
+
+class ProgresoEventoSerializer(serializers.Serializer):
+    evento_id = serializers.IntegerField()
+    total_gestiones = serializers.IntegerField()
+    gestiones_hechas = serializers.IntegerField()
+    porcentaje = serializers.FloatField()
