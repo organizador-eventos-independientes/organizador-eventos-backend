@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
-from .models import ConfiguracionOrganizador, Subtarea
+from .models import LIMITE_HORAS_MAXIMO, ConfiguracionOrganizador, Subtarea
 
 
 def configuracion_de(organizador):
@@ -50,9 +50,49 @@ def limite_bajo_lo_planificado(organizador, limite):
     planificado en ningún día (llegar justo al límite sí se permite). Devuelve
     el mensaje de error con los días que lo impiden, o None si el límite cabe."""
     dias = dias_sobre_limite(organizador, limite)
+    return mensaje_de_limite(limite, dias) if dias else None
+
+
+def conflicto_de_limite(organizador, limite):
+    """US-12: si `limite` queda por debajo de lo planificado en algún día,
+    devuelve lo necesario para resolverlo: los días que lo impiden con sus
+    gestiones (para moverlas o reducirlas) y el límite más bajo que sí cabe.
+    Si el límite cabe, devuelve None."""
+    dias = dias_sobre_limite(organizador, limite)
     if not dias:
         return None
 
+    limite_min = a_minutos(limite)
+    gestiones = defaultdict(list)
+    del_conflicto = (
+        Subtarea.objects.filter(evento__organizador=organizador, plazo__in=[dia for dia, _ in dias])
+        .select_related('evento')
+        .order_by('plazo', 'horas_estimadas', 'nombre')
+    )
+    for subtarea in del_conflicto:
+        gestiones[subtarea.plazo].append(subtarea)
+
+    # El día más cargado marca el límite más bajo que cabe; si pasa del máximo
+    # permitido, ningún límite sirve y hay que mover o reducir gestiones.
+    minimo_min = max(minutos for _, minutos in dias)
+    return {
+        'mensaje': mensaje_de_limite(limite, dias),
+        'limite': limite,
+        'limite_minimo': a_horas(minimo_min) if minimo_min <= a_minutos(LIMITE_HORAS_MAXIMO) else None,
+        'dias': [
+            {
+                'fecha': dia,
+                'planificadas': a_horas(minutos),
+                'exceso': a_horas(minutos - limite_min),
+                'gestiones': gestiones[dia],
+            }
+            for dia, minutos in dias
+        ],
+    }
+
+
+def mensaje_de_limite(limite, dias):
+    # `dias`: los pares (día, minutos) que pasan de `limite`.
     limite_texto = duracion_texto(a_minutos(limite))
     if len(dias) == 1:
         dia, minutos = dias[0]
@@ -111,12 +151,16 @@ def sobrecarga_al_guardar(organizador, subtarea, plazo, horas):
     }
 
 
-def detectar_sobrecarga(organizador, subtarea, plazo, horas):
-    """US-07: si al dejar `subtarea` en `plazo` con `horas` ese día supera el
-    límite diario del organizador (sumando todos sus eventos), devuelve el
-    conflicto con lo necesario para resolverlo; si cabe, devuelve None."""
+def detectar_sobrecarga(organizador, subtarea, plazo, horas, evento=None):
+    """US-07 y US-08: si al dejar `subtarea` en `plazo` con `horas` ese día
+    supera el límite diario del organizador (sumando todos sus eventos),
+    devuelve el conflicto con lo necesario para resolverlo; si cabe, devuelve
+    None. Al crear una gestión, `subtarea` es None y se indica su `evento`."""
+    evento = evento or subtarea.evento
     limite = configuracion_de(organizador).limite_horas_diarias
-    otras = Subtarea.objects.filter(evento__organizador=organizador).exclude(pk=subtarea.pk)
+    otras = Subtarea.objects.filter(evento__organizador=organizador)
+    if subtarea is not None:
+        otras = otras.exclude(pk=subtarea.pk)
     del_dia = list(
         otras.filter(plazo=plazo)
         .select_related('evento')
@@ -143,7 +187,7 @@ def detectar_sobrecarga(organizador, subtarea, plazo, horas):
         # Para "reducir horas": lo máximo que cabe ese día.
         'horas_disponibles': a_horas(max(limite_min - planificadas_min, 0)),
         'siguiente_dia_disponible': siguiente_dia_con_espacio(
-            otras, plazo, gestion_min, limite_min, subtarea.evento.fecha
+            otras, plazo, gestion_min, limite_min, evento.fecha
         ),
         'gestiones_del_dia': del_dia,
     }

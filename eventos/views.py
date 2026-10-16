@@ -31,6 +31,16 @@ from .serializers import (
 )
 
 
+def errores_de(serializer):
+    # 400 con los errores de validación. Si se rechazó por pasar del límite
+    # diario, va también `conflicto` con lo necesario para resolverlo.
+    datos = dict(serializer.errors)
+    conflicto = getattr(serializer, 'conflicto', None)
+    if conflicto is not None:
+        datos['conflicto'] = conflicto
+    return Response(datos, status=status.HTTP_400_BAD_REQUEST)
+
+
 def datos_sesion(user, token):
     return {
         'token': token.key,
@@ -119,12 +129,16 @@ class ConfiguracionView(APIView):
         request=ConfiguracionSerializer,
         responses={
             200: ConfiguracionSerializer,
-            400: OpenApiResponse(description='El límite diario no es válido.'),
+            400: OpenApiResponse(
+                description='El límite diario no es válido. Si deja días por encima de lo '
+                            'planificado, trae `conflicto` (ConflictoLimite) para resolverlo.'
+            ),
         },
     )
     def patch(self, request):
         serializer = ConfiguracionSerializer(configuracion_de(request.user), data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return errores_de(serializer)
         serializer.save()
         return Response(serializer.data)
 
@@ -165,7 +179,8 @@ class EventoViewSet(viewsets.ModelViewSet):
         responses={
             201: SubtareaSerializer,
             400: OpenApiResponse(
-                description='Error de validación de los datos de la subtarea.'
+                description='Error de validación de los datos de la subtarea. Si ese día '
+                            'pasa del límite diario, trae `conflicto` para resolverlo.'
             ),
         },
     )
@@ -191,10 +206,7 @@ class EventoViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_201_CREATED
             )
 
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return errores_de(serializer)
     
     @extend_schema(
         responses={
@@ -240,6 +252,23 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         if self.action == 'reprogramar':
             return ReprogramarSubtareaSerializer
         return SubtareaSerializer
+
+    # Crear y editar: si ese día pasa del límite diario, el 400 trae el
+    # conflicto con las mismas opciones para resolverlo que al reprogramar.
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return errores_de(serializer)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        serializer = self.get_serializer(self.get_object(), data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return errores_de(serializer)
+        serializer.save()
+        return Response(serializer.data)
     
     @extend_schema(
         request=ActualizarEstadoSubtareaSerializer,

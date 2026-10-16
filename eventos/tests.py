@@ -689,6 +689,36 @@ class ConfiguracionTests(APITestCase):
 
         ConfiguracionOrganizador(organizador=self.ana, limite_horas_diarias=Decimal('5')).full_clean()
 
+    def test_conflicto_trae_los_dias_y_el_limite_minimo(self):
+        # Un día con 4 h + 2 h = 6 h y otro con 1 h: bajar a 2 h choca solo con el primero.
+        self.gestiones(self.ana, (3, 4), (3, 2), (5, 1))
+        dia = timezone.localdate() + timedelta(days=3)
+
+        conflicto = self.guardar(self.ana, '2').data['conflicto']
+
+        self.assertEqual(conflicto['limite'], '2.00')
+        self.assertEqual(conflicto['limite_minimo'], '6.00')
+        self.assertIn('No puedes cambiar el límite a 2h', conflicto['mensaje'])
+        self.assertEqual(len(conflicto['dias']), 1)
+        self.assertEqual(conflicto['dias'][0]['fecha'], dia.isoformat())
+        self.assertEqual(conflicto['dias'][0]['planificadas'], '6.00')
+        self.assertEqual(conflicto['dias'][0]['exceso'], '4.00')
+        self.assertEqual([g['horas_estimadas'] for g in conflicto['dias'][0]['gestiones']], ['2.00', '4.00'])
+
+        # Usar el límite mínimo propuesto resuelve el conflicto.
+        self.assertEqual(self.guardar(self.ana, conflicto['limite_minimo']).status_code, status.HTTP_200_OK)
+
+    def test_sin_limite_minimo_si_un_dia_pasa_del_maximo(self):
+        # Datos de antes de la regla: un día con 17 h no cabe en ningún límite.
+        self.gestiones(self.ana, (2, 17))
+
+        conflicto = self.guardar(self.ana, '6').data['conflicto']
+
+        self.assertIsNone(conflicto['limite_minimo'])
+
+    def test_fuera_de_rango_no_trae_conflicto(self):
+        self.assertNotIn('conflicto', self.guardar(self.ana, '20').data)
+
     def test_exige_sesion(self):
         for res in [
             self.client.get('/api/configuracion/'),
@@ -902,6 +932,47 @@ class LimiteDiarioAlCrearYEditarTests(APITestCase):
         self.assertEqual(res.data['horas_estimadas'], ['Ese día solo caben 1h más.'])
         gestion.refresh_from_db()
         self.assertEqual(gestion.plazo, self.dia)
+
+    def test_crear_con_conflicto_trae_las_opciones_para_resolverlo(self):
+        # US-08: lo mismo que al reprogramar: reducir horas o posponer.
+        self.gestion(4, evento=self.feria, nombre='Cotizar sonido')
+
+        conflicto = self.crear('3').data['conflicto']
+
+        self.assertEqual(conflicto['fecha'], self.dia.isoformat())
+        self.assertEqual(conflicto['planificadas'], '4.00')
+        self.assertEqual(conflicto['horas_gestion'], '3.00')
+        self.assertEqual(conflicto['horas_disponibles'], '2.00')
+        self.assertEqual(conflicto['siguiente_dia_disponible'], (self.dia + timedelta(days=1)).isoformat())
+        self.assertEqual([g['nombre'] for g in conflicto['gestiones_del_dia']], ['Cotizar sonido'])
+        self.assertIn('Quedarías con 7h', conflicto['mensaje'])
+
+    def test_editar_con_conflicto_trae_las_opciones_sin_contarse_a_si_misma(self):
+        gestion = self.gestion(2)
+        self.gestion(3, evento=self.feria)
+
+        conflicto = self.editar(gestion, horas_estimadas='4').data['conflicto']
+
+        self.assertEqual(conflicto['planificadas'], '3.00')
+        self.assertEqual(conflicto['horas_disponibles'], '3.00')
+        self.assertNotIn(gestion.id, [g['id'] for g in conflicto['gestiones_del_dia']])
+
+        # Reducir a lo disponible resuelve el conflicto y se guarda.
+        res = self.editar(gestion, horas_estimadas=conflicto['horas_disponibles'])
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_posponer_al_dia_sugerido_resuelve_el_conflicto(self):
+        gestion = self.gestion(2)
+        self.gestion(5, evento=self.feria)
+
+        conflicto = self.editar(gestion, horas_estimadas='3').data['conflicto']
+        res = self.editar(gestion, plazo=conflicto['siguiente_dia_disponible'], horas_estimadas='3')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['plazo'], conflicto['siguiente_dia_disponible'])
+
+    def test_otros_errores_no_traen_conflicto(self):
+        self.assertNotIn('conflicto', self.crear('0').data)
 
     def test_editar_solo_el_nombre_no_revisa_el_limite(self):
         # Un día que ya pasaba del límite (datos de antes de esta regla).

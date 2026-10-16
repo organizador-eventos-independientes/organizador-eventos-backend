@@ -5,7 +5,13 @@ from django.db import IntegrityError
 from django.utils import timezone, translation
 from rest_framework import serializers
 from rest_framework.settings import api_settings
-from .carga import a_horas, a_minutos, limite_bajo_lo_planificado, sobrecarga_al_guardar
+from .carga import (
+    a_horas,
+    a_minutos,
+    conflicto_de_limite,
+    detectar_sobrecarga,
+    sobrecarga_al_guardar,
+)
 from .models import (
     LIMITE_FUERA_DE_RANGO,
     LIMITE_HORAS_MAXIMO,
@@ -174,6 +180,11 @@ class SubtareaSerializer(serializers.ModelSerializer):
         if cambia_la_carga and horas is not None and evento.organizador_id is not None:
             errores = sobrecarga_al_guardar(evento.organizador, self.instance, plazo, horas)
             if errores:
+                # Con los errores va el conflicto, con las mismas opciones para
+                # resolverlo que al reprogramar (US-08): la vista lo agrega.
+                self.conflicto = ConflictoSobrecargaSerializer(
+                    detectar_sobrecarga(evento.organizador, self.instance, plazo, horas, evento)
+                ).data
                 general = errores.pop('general')
                 raise serializers.ValidationError({api_settings.NON_FIELD_ERRORS_KEY: [general], **errores})
         return attrs
@@ -312,6 +323,7 @@ class HoyRespuestaSerializer(serializers.Serializer):
 class ConflictoSobrecargaSerializer(serializers.Serializer):
     # US-07: el día elegido y lo que ya tiene planificado, más los datos para
     # resolverlo (reducir horas o posponer al siguiente día con espacio).
+    mensaje = serializers.CharField()
     fecha = serializers.DateField()
     limite = serializers.DecimalField(max_digits=4, decimal_places=2)
     planificadas = serializers.DecimalField(max_digits=9, decimal_places=2)
@@ -325,6 +337,24 @@ class ConflictoSobrecargaSerializer(serializers.Serializer):
 class ConflictoRespuestaSerializer(serializers.Serializer):
     detail = serializers.CharField()
     conflicto = ConflictoSobrecargaSerializer()
+
+
+class DiaSobreLimiteSerializer(serializers.Serializer):
+    fecha = serializers.DateField()
+    planificadas = serializers.DecimalField(max_digits=9, decimal_places=2)
+    # Lo que sobra ese día respecto al nuevo límite.
+    exceso = serializers.DecimalField(max_digits=9, decimal_places=2)
+    gestiones = SubtareaHoySerializer(many=True)
+
+
+class ConflictoLimiteSerializer(serializers.Serializer):
+    # US-12: el límite pedido deja días por encima. Para resolverlo: usar
+    # `limite_minimo` (lo que tiene el día más cargado; null si pasa del máximo
+    # permitido) o mover o reducir las gestiones de esos días.
+    mensaje = serializers.CharField()
+    limite = serializers.DecimalField(max_digits=4, decimal_places=2)
+    limite_minimo = serializers.DecimalField(max_digits=4, decimal_places=2, allow_null=True)
+    dias = DiaSobreLimiteSerializer(many=True)
 
 
 class ConfiguracionSerializer(serializers.ModelSerializer):
@@ -355,10 +385,12 @@ class ConfiguracionSerializer(serializers.ModelSerializer):
     def validate_limite_horas_diarias(self, value):
         if not LIMITE_HORAS_MINIMO <= value <= LIMITE_HORAS_MAXIMO:
             raise serializers.ValidationError(LIMITE_FUERA_DE_RANGO)
-        # Tampoco puede quedar por debajo de las horas que ya tiene algún día.
-        mensaje = limite_bajo_lo_planificado(self.instance.organizador, value)
-        if mensaje:
-            raise serializers.ValidationError(mensaje)
+        # Tampoco puede quedar por debajo de las horas que ya tiene algún día;
+        # con el error va el conflicto para resolverlo (la vista lo agrega).
+        conflicto = conflicto_de_limite(self.instance.organizador, value)
+        if conflicto:
+            self.conflicto = ConflictoLimiteSerializer(conflicto).data
+            raise serializers.ValidationError(conflicto['mensaje'])
         return value
 
 
