@@ -11,6 +11,7 @@ from .carga import (
     conflicto_de_limite,
     detectar_sobrecarga,
     sobrecarga_al_guardar,
+    sobrecarga_al_reabrir,
 )
 from .models import (
     LIMITE_FUERA_DE_RANGO,
@@ -257,6 +258,16 @@ class ActualizarEstadoSubtareaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtarea
         fields = ['estado', 'nota_estado']
+
+    def validate(self, attrs):
+        # Una gestión hecha no cuenta para el límite diario; si vuelve a estar
+        # por hacer y su día ya no tiene espacio, no se guarda el cambio.
+        estado = attrs.get('estado')
+        if self.instance.estado == Subtarea.ESTADO_HECHA and estado != Subtarea.ESTADO_HECHA:
+            mensaje = sobrecarga_al_reabrir(self.instance, estado)
+            if mensaje:
+                raise serializers.ValidationError(mensaje)
+        return attrs
 
 
 class HoyFiltrosSerializer(serializers.Serializer):

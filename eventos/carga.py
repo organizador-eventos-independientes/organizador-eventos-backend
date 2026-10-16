@@ -33,13 +33,24 @@ def duracion_texto(minutos):
     return f'{horas}:{resto:02d}' if resto else str(horas)
 
 
+def gestiones_que_cuentan(organizador):
+    # Para el límite diario solo cuentan las gestiones por hacer (pendientes o
+    # pospuestas), las que aparecen en Hoy: una hecha ya no ocupa tiempo.
+    return Subtarea.objects.filter(evento__organizador=organizador).exclude(estado=Subtarea.ESTADO_HECHA)
+
+
+def no_cuenta(subtarea):
+    return subtarea is not None and subtarea.estado == Subtarea.ESTADO_HECHA
+
+
 def dias_sobre_limite(organizador, limite):
-    """US-12: los días en que las gestiones del organizador (sumando todos sus
-    eventos) ya pasan de `limite`, como pares (día, minutos planificados), del
-    más antiguo al más lejano. Cuentan todos los días, también los vencidos."""
+    """US-12: los días en que las gestiones por hacer del organizador (sumando
+    todos sus eventos) ya pasan de `limite`, como pares (día, minutos
+    planificados), del más antiguo al más lejano. Cuentan todos los días,
+    también los vencidos."""
     limite_min = a_minutos(limite)
     por_dia = defaultdict(int)
-    gestiones = Subtarea.objects.filter(evento__organizador=organizador)
+    gestiones = gestiones_que_cuentan(organizador)
     for dia, horas in gestiones.values_list('plazo', 'horas_estimadas'):
         por_dia[dia] += a_minutos(horas)
     return [(dia, minutos) for dia, minutos in sorted(por_dia.items()) if minutos > limite_min]
@@ -65,7 +76,7 @@ def conflicto_de_limite(organizador, limite):
     limite_min = a_minutos(limite)
     gestiones = defaultdict(list)
     del_conflicto = (
-        Subtarea.objects.filter(evento__organizador=organizador, plazo__in=[dia for dia, _ in dias])
+        gestiones_que_cuentan(organizador).filter(plazo__in=[dia for dia, _ in dias])
         .select_related('evento')
         .order_by('plazo', 'horas_estimadas', 'nombre')
     )
@@ -115,8 +126,11 @@ def sobrecarga_al_guardar(organizador, subtarea, plazo, horas):
     día pasa del límite diario del organizador (sumando todos sus eventos),
     devuelve los errores para el formulario: un mensaje general y uno corto para
     el campo que conviene cambiar. Si cabe, devuelve None. `subtarea` es la que
-    se edita (no se cuenta dos veces) o None al crearla."""
-    gestiones = Subtarea.objects.filter(evento__organizador=organizador, plazo=plazo)
+    se edita (no se cuenta dos veces) o None al crearla. Una gestión hecha no
+    cuenta, así que editarla nunca choca con el límite."""
+    if no_cuenta(subtarea):
+        return None
+    gestiones = gestiones_que_cuentan(organizador).filter(plazo=plazo)
     if subtarea is not None:
         gestiones = gestiones.exclude(pk=subtarea.pk)
     planificadas_min = sum(a_minutos(h) for h in gestiones.values_list('horas_estimadas', flat=True))
@@ -155,10 +169,38 @@ def detectar_sobrecarga(organizador, subtarea, plazo, horas, evento=None):
     """US-07 y US-08: si al dejar `subtarea` en `plazo` con `horas` ese día
     supera el límite diario del organizador (sumando todos sus eventos),
     devuelve el conflicto con lo necesario para resolverlo; si cabe, devuelve
-    None. Al crear una gestión, `subtarea` es None y se indica su `evento`."""
+    None. Al crear una gestión, `subtarea` es None y se indica su `evento`.
+    Una gestión hecha no cuenta, así que moverla nunca choca con el límite."""
+    if no_cuenta(subtarea):
+        return None
+    return sobrecarga_del_dia(organizador, subtarea, plazo, horas, evento)
+
+
+def sobrecarga_al_reabrir(subtarea, estado):
+    """Una gestión hecha no cuenta para el límite diario; al volver a `estado`
+    (pendiente o pospuesta) vuelve a contar. Si con ella su día pasa del
+    límite, devuelve el mensaje de error; si cabe, devuelve None."""
+    organizador = subtarea.evento.organizador
+    if organizador is None:
+        return None
+    conflicto = sobrecarga_del_dia(
+        organizador, subtarea, subtarea.plazo, subtarea.horas_estimadas, subtarea.evento
+    )
+    if conflicto is None:
+        return None
+    return (
+        f'No puedes pasarla a {estado}: el {subtarea.plazo:%d/%m/%Y} quedarías con '
+        f'{duracion_texto(a_minutos(conflicto["total"]))}h de gestión planificadas '
+        f'(límite {duracion_texto(a_minutos(conflicto["limite"]))}h). '
+        'Reprográmala o reduce sus horas primero.'
+    )
+
+
+def sobrecarga_del_dia(organizador, subtarea, plazo, horas, evento=None):
+    # El cálculo de detectar_sobrecarga, contando `subtarea` aunque esté hecha.
     evento = evento or subtarea.evento
     limite = configuracion_de(organizador).limite_horas_diarias
-    otras = Subtarea.objects.filter(evento__organizador=organizador)
+    otras = gestiones_que_cuentan(organizador)
     if subtarea is not None:
         otras = otras.exclude(pk=subtarea.pk)
     del_dia = list(

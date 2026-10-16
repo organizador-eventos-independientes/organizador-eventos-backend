@@ -275,7 +275,8 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         responses={
             200: SubtareaHoySerializer,
             400: OpenApiResponse(
-                description='El estado o la nota enviados no son válidos.'
+                description='El estado o la nota enviados no son válidos, o una gestión '
+                            'hecha vuelve a estar por hacer y su día pasa del límite diario.'
             ),
             404: OpenApiResponse(
                 description='La gestión no existe o pertenece a otro organizador.'
@@ -353,9 +354,10 @@ class SubtareaViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'], url_path='hoy')
     def hoy(self, request):
-        # Vista "Hoy" (US-04): vencidas, para hoy y próximas según el plazo
-        # respecto a hoy. Dentro de cada grupo, plazo más cercano primero y, si
-        # empatan, la de menos horas estimadas. Filtros opcionales (US-05).
+        # Vista "Hoy" (US-04): las gestiones por hacer (no las hechas), en
+        # vencidas, para hoy y próximas según el plazo respecto a hoy. Dentro
+        # de cada grupo, plazo más cercano primero y, si empatan, la de menos
+        # horas estimadas. Filtros opcionales (US-05).
         filtros = HoyFiltrosSerializer(data=request.query_params, context={'request': request})
         filtros.is_valid(raise_exception=True)
         evento = filtros.validated_data.get('evento')
@@ -365,6 +367,7 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         hoy = timezone.localdate()
         subtareas = (
             self.get_queryset()
+            .exclude(estado=Subtarea.ESTADO_HECHA)
             .select_related('evento')
             .order_by('plazo', 'horas_estimadas', 'nombre')
         )

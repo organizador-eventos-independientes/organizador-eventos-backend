@@ -233,6 +233,14 @@ class VistaHoyTests(APITestCase):
         self.assertEqual(res.data['hoy'][0]['evento'], self.boda.id)
         self.assertEqual(res.data['hoy'][0]['evento_titulo'], 'Boda Ana y Luis')
 
+    def test_no_muestra_las_gestiones_hechas(self):
+        self.gestion('Reservar salón', 0)
+        hecha = self.gestion('Confirmar catering', 0)
+        hecha.estado = Subtarea.ESTADO_HECHA
+        hecha.save()
+
+        self.assertEqual(self.nombres(self.consultar())['hoy'], ['Reservar salón'])
+
     def test_solo_muestra_las_gestiones_del_organizador(self):
         beto = User.objects.create_user(username='beto', password='clave-beto-123')
         self.gestion('Gestión de Beto', 0, evento=crear_evento(beto, titulo='Evento de Beto'))
@@ -1056,3 +1064,88 @@ class EstadoSubtareaTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(res.data['estado'], ['El estado debe ser Pendiente, Hecha o Pospuesta.'])
         self.assertEqual(Subtarea.objects.get(pk=gestion_id).estado, 'Pendiente')
+
+
+class GestionesHechasNoCuentanTests(APITestCase):
+    """Para el límite diario solo cuentan las gestiones por hacer (las que
+    aparecen en Hoy): una hecha ya no ocupa tiempo."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.boda = crear_evento(self.ana)
+        self.dia = timezone.localdate() + timedelta(days=5)
+
+    def gestion(self, horas, estado='Pendiente', plazo=None, nombre='Reservar salón'):
+        return Subtarea.objects.create(
+            evento=self.boda, nombre=nombre, plazo=plazo or self.dia, horas_estimadas=horas, estado=estado
+        )
+
+    def marcar(self, gestion, estado):
+        return self.client.patch(f'/api/subtareas/{gestion.id}/estado/', {'estado': estado})
+
+    def test_crear_no_cuenta_las_hechas(self):
+        self.gestion(5, estado='Hecha')
+
+        res = self.client.post(f'/api/eventos/{self.boda.id}/subtareas/', {
+            'nombre': 'Confirmar catering', 'plazo': self.dia.isoformat(), 'horas_estimadas': '6'
+        })
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+    def test_reprogramar_no_cuenta_las_hechas(self):
+        self.gestion(5, estado='Hecha')
+        gestion = self.gestion(3, plazo=timezone.localdate())
+
+        res = self.client.patch(f'/api/subtareas/{gestion.id}/reprogramar/', {'plazo': self.dia.isoformat()})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_el_conflicto_no_suma_ni_lista_las_hechas(self):
+        self.gestion(5, estado='Hecha', nombre='Ya hecha')
+        self.gestion(4, nombre='Por hacer')
+        gestion = self.gestion(3, plazo=timezone.localdate())
+
+        res = self.client.patch(f'/api/subtareas/{gestion.id}/reprogramar/', {'plazo': self.dia.isoformat()})
+
+        self.assertEqual(res.status_code, status.HTTP_409_CONFLICT)
+        conflicto = res.data['conflicto']
+        self.assertEqual(conflicto['planificadas'], '4.00')
+        self.assertEqual(conflicto['horas_disponibles'], '2.00')
+        self.assertEqual([g['nombre'] for g in conflicto['gestiones_del_dia']], ['Por hacer'])
+
+    def test_el_limite_no_cuenta_las_hechas(self):
+        self.gestion(6, estado='Hecha')
+
+        res = self.client.patch('/api/configuracion/', {'limite_horas_diarias': '1'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_editar_una_hecha_no_revisa_el_limite(self):
+        self.gestion(5)
+        hecha = self.gestion(1, estado='Hecha')
+
+        res = self.client.patch(f'/api/subtareas/{hecha.id}/', {'horas_estimadas': '3'})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_reabrir_una_hecha_sin_espacio_no_se_guarda(self):
+        # Al volver a estar por hacer vuelve a contar: 5 h + 2 h pasan de 6 h.
+        self.gestion(5)
+        hecha = self.gestion(2, estado='Hecha')
+
+        res = self.marcar(hecha, 'Pendiente')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['non_field_errors'], [
+            f'No puedes pasarla a Pendiente: el {self.dia:%d/%m/%Y} quedarías con 7h de gestión '
+            'planificadas (límite 6h). Reprográmala o reduce sus horas primero.'
+        ])
+        hecha.refresh_from_db()
+        self.assertEqual(hecha.estado, 'Hecha')
+
+    def test_reabrir_una_hecha_con_espacio_se_guarda(self):
+        self.gestion(4)
+        hecha = self.gestion(2, estado='Hecha')
+
+        self.assertEqual(self.marcar(hecha, 'Pospuesta').status_code, status.HTTP_200_OK)
