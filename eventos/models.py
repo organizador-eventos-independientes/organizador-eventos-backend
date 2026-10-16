@@ -36,17 +36,15 @@ class Evento(models.Model):
     def __str__(self):
         return self.titulo
 
-
 class Subtarea(models.Model):
-    ESTADO_PENDIENTE = 'Pendiente'
     ESTADO_HECHA = 'Hecha'
     ESTADO_POSPUESTA = 'Pospuesta'
 
     ESTADOS = [
-        (ESTADO_PENDIENTE, 'Pendiente'),
         (ESTADO_HECHA, 'Hecha'),
         (ESTADO_POSPUESTA, 'Pospuesta'),
     ]
+
 
     evento = models.ForeignKey(
         Evento,
@@ -63,7 +61,7 @@ class Subtarea(models.Model):
     estado = models.CharField(
         max_length=20,
         choices=ESTADOS,
-        default=ESTADO_PENDIENTE
+        default=ESTADO_POSPUESTA
     )
     nota_estado = models.TextField(blank=True, default='')
 
