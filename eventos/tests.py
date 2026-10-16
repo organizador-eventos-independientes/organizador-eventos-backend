@@ -913,3 +913,75 @@ class LimiteDiarioAlCrearYEditarTests(APITestCase):
         )
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+
+class EstadoSubtareaTests(APITestCase):
+    """US-09: la gestión nace pendiente y puede pasar a hecha o pospuesta."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.boda = crear_evento(self.ana)
+        self.client.force_authenticate(self.ana)
+
+    def crear(self, **extra):
+        return self.client.post(f'/api/eventos/{self.boda.id}/subtareas/', {
+            'nombre': 'Reservar salón',
+            'plazo': timezone.localdate().isoformat(),
+            'horas_estimadas': '1',
+            **extra,
+        })
+
+    def marcar(self, gestion_id, **datos):
+        return self.client.patch(f'/api/subtareas/{gestion_id}/estado/', datos)
+
+    def test_la_gestion_nueva_queda_pendiente_en_hoy(self):
+        res = self.crear()
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['estado'], 'Pendiente')
+        hoy = self.client.get('/api/subtareas/hoy/')
+        self.assertEqual([s['estado'] for s in hoy.data['hoy']], ['Pendiente'])
+
+    def test_al_crear_o_editar_no_se_elige_el_estado(self):
+        gestion_id = self.crear(estado='Hecha', nota_estado='ya está').data['id']
+        self.client.patch(f'/api/subtareas/{gestion_id}/', {'estado': 'Hecha'})
+
+        gestion = Subtarea.objects.get(pk=gestion_id)
+        self.assertEqual(gestion.estado, 'Pendiente')
+        self.assertEqual(gestion.nota_estado, '')
+
+    def test_escenario_1_marcar_hecha(self):
+        gestion_id = self.crear().data['id']
+
+        res = self.marcar(gestion_id, estado='Hecha')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['estado'], 'Hecha')
+
+    def test_escenario_2_posponer_con_nota(self):
+        gestion_id = self.crear().data['id']
+
+        res = self.marcar(gestion_id, estado='Pospuesta', nota_estado='esperando confirmación de salón')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        gestion = Subtarea.objects.get(pk=gestion_id)
+        self.assertEqual(gestion.estado, 'Pospuesta')
+        self.assertEqual(gestion.nota_estado, 'esperando confirmación de salón')
+
+    def test_puede_volver_a_pendiente(self):
+        gestion_id = self.crear().data['id']
+        self.marcar(gestion_id, estado='Hecha')
+
+        res = self.marcar(gestion_id, estado='Pendiente')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(Subtarea.objects.get(pk=gestion_id).estado, 'Pendiente')
+
+    def test_estado_no_valido_no_guarda(self):
+        gestion_id = self.crear().data['id']
+
+        res = self.marcar(gestion_id, estado='Completada')
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['estado'], ['El estado debe ser Pendiente, Hecha o Pospuesta.'])
+        self.assertEqual(Subtarea.objects.get(pk=gestion_id).estado, 'Pendiente')

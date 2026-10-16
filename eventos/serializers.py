@@ -131,6 +131,8 @@ class SubtareaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtarea
         fields = '__all__'
+        # Al crearla queda pendiente; el estado solo cambia por /estado/ (US-09).
+        read_only_fields = ['estado', 'nota_estado']
         extra_kwargs = {
             'evento': {'required': False}
         }
@@ -226,9 +228,14 @@ class ReprogramarSubtareaSerializer(serializers.ModelSerializer):
 
 
 class ActualizarEstadoSubtareaSerializer(serializers.ModelSerializer):
+    # US-09: los tres estados de una gestión: pendiente, hecha o pospuesta.
     estado = serializers.ChoiceField(
         choices=Subtarea.ESTADOS,
-        required=True
+        required=True,
+        error_messages={
+            'required': 'Indica el estado de la gestión.',
+            'invalid_choice': 'El estado debe ser Pendiente, Hecha o Pospuesta.'
+        }
     )
     nota_estado = serializers.CharField(
         required=False,

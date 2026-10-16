@@ -37,14 +37,16 @@ class Evento(models.Model):
         return self.titulo
 
 class Subtarea(models.Model):
+    # Toda gestión nace pendiente y puede pasar a hecha o pospuesta (US-09).
+    ESTADO_PENDIENTE = 'Pendiente'
     ESTADO_HECHA = 'Hecha'
     ESTADO_POSPUESTA = 'Pospuesta'
 
     ESTADOS = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
         (ESTADO_HECHA, 'Hecha'),
         (ESTADO_POSPUESTA, 'Pospuesta'),
     ]
-
 
     evento = models.ForeignKey(
         Evento,
@@ -61,7 +63,7 @@ class Subtarea(models.Model):
     estado = models.CharField(
         max_length=20,
         choices=ESTADOS,
-        default=ESTADO_POSPUESTA
+        default=ESTADO_PENDIENTE
     )
     nota_estado = models.TextField(blank=True, default='')
 
