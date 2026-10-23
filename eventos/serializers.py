@@ -252,7 +252,8 @@ class ActualizarEstadoSubtareaSerializer(serializers.ModelSerializer):
     nota_estado = serializers.CharField(
         required=False,
         allow_blank=True,
-        default=''
+        default='',
+        help_text='Nota opcional; solo se acepta al posponer la gestión.'
     )
 
     class Meta:
@@ -260,9 +261,20 @@ class ActualizarEstadoSubtareaSerializer(serializers.ModelSerializer):
         fields = ['estado', 'nota_estado']
 
     def validate(self, attrs):
+        # La petición es parcial: sin `estado` se conserva el que ya tiene.
+        estado = attrs.get('estado', self.instance.estado)
+
+        # US-09, escenario 2: la nota explica por qué se pospone, así que solo
+        # la lleva una gestión pospuesta. En otro estado se borra.
+        if estado != Subtarea.ESTADO_POSPUESTA:
+            if attrs.get('nota_estado'):
+                raise serializers.ValidationError({
+                    'nota_estado': 'Solo puedes agregar una nota al posponer la gestión.'
+                })
+            attrs['nota_estado'] = ''
+
         # Una gestión hecha no cuenta para el límite diario; si vuelve a estar
         # por hacer y su día ya no tiene espacio, no se guarda el cambio.
-        estado = attrs.get('estado')
         if self.instance.estado == Subtarea.ESTADO_HECHA and estado != Subtarea.ESTADO_HECHA:
             mensaje = sobrecarga_al_reabrir(self.instance, estado)
             if mensaje:

@@ -1047,6 +1047,28 @@ class EstadoSubtareaTests(APITestCase):
         self.assertEqual(gestion.estado, 'Pospuesta')
         self.assertEqual(gestion.nota_estado, 'esperando confirmación de salón')
 
+    def test_solo_se_pone_nota_al_posponer(self):
+        gestion_id = self.crear().data['id']
+
+        for estado in ['Hecha', 'Pendiente']:
+            res = self.marcar(gestion_id, estado=estado, nota_estado='ya quedó')
+
+            self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertEqual(res.data['nota_estado'], ['Solo puedes agregar una nota al posponer la gestión.'])
+        gestion = Subtarea.objects.get(pk=gestion_id)
+        self.assertEqual(gestion.estado, 'Pendiente')
+        self.assertEqual(gestion.nota_estado, '')
+
+    def test_al_dejar_de_estar_pospuesta_se_borra_la_nota(self):
+        gestion_id = self.crear().data['id']
+        self.marcar(gestion_id, estado='Pospuesta', nota_estado='esperando confirmación de salón')
+
+        res = self.marcar(gestion_id, estado='Hecha')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['nota_estado'], '')
+        self.assertEqual(Subtarea.objects.get(pk=gestion_id).nota_estado, '')
+
     def test_puede_volver_a_pendiente(self):
         gestion_id = self.crear().data['id']
         self.marcar(gestion_id, estado='Hecha')

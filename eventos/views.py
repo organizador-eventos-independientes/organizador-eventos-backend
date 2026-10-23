@@ -275,8 +275,9 @@ class SubtareaViewSet(viewsets.ModelViewSet):
         responses={
             200: SubtareaHoySerializer,
             400: OpenApiResponse(
-                description='El estado o la nota enviados no son válidos, o una gestión '
-                            'hecha vuelve a estar por hacer y su día pasa del límite diario.'
+                description='El estado no es válido, se envía una nota sin posponer la '
+                            'gestión, o una gestión hecha vuelve a estar por hacer y su '
+                            'día pasa del límite diario.'
             ),
             404: OpenApiResponse(
                 description='La gestión no existe o pertenece a otro organizador.'
