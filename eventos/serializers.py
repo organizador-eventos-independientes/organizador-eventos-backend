@@ -67,12 +67,30 @@ class EventoSerializer(serializers.ModelSerializer):
         }
     )
 
+    tipo_otro = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=40,
+        error_messages={
+            'max_length': 'El tipo de evento no puede superar 40 caracteres.'
+        }
+    )
+
     cliente = serializers.CharField(
         required=True,
         allow_blank=False,
         error_messages={
-            'required': 'El cliente o contacto es obligatorio.',
-            'blank': 'El cliente o contacto es obligatorio.'
+            'required': 'El cliente es obligatorio.',
+            'blank': 'El cliente es obligatorio.'
+        }
+    )
+
+    contacto = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        error_messages={
+            'required': 'El contacto del cliente es obligatorio.',
+            'blank': 'El contacto del cliente es obligatorio.'
         }
     )
 
@@ -105,6 +123,20 @@ class EventoSerializer(serializers.ModelSerializer):
         model = Evento
         fields = '__all__'
         read_only_fields = ['organizador']
+
+    def validate(self, attrs):
+        # Con el tipo "otro" hay que escribir cuál es (`tipo_otro`); con los
+        # demás tipos se guarda vacío. Al editar se revisa solo si llega alguno
+        # de los dos.
+        if 'tipo' not in attrs and 'tipo_otro' not in attrs:
+            return attrs
+        tipo = attrs.get('tipo', getattr(self.instance, 'tipo', ''))
+        if tipo != 'otro':
+            attrs['tipo_otro'] = ''
+            return attrs
+        if not attrs.get('tipo_otro', getattr(self.instance, 'tipo_otro', '')):
+            raise serializers.ValidationError({'tipo_otro': 'Escribe qué tipo de evento es.'})
+        return attrs
 
 
 class SubtareaSerializer(serializers.ModelSerializer):

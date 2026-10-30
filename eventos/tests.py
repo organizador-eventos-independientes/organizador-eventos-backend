@@ -18,6 +18,7 @@ def crear_evento(organizador, titulo='Boda Ana y Luis'):
         titulo=titulo,
         tipo='boda',
         cliente='Ana Pérez',
+        contacto='300 123 4567',
         fecha=date.today() + timedelta(days=30),
         hora=time(18, 0),
         lugar='Salón Los Robles'
@@ -176,6 +177,7 @@ class AislamientoPorOrganizadorTests(APITestCase):
             'titulo': 'Cumpleaños de Beto',
             'tipo': 'cumpleanos',
             'cliente': 'Beto',
+            'contacto': 'beto@correo.com',
             'fecha': (date.today() + timedelta(days=10)).isoformat(),
             'hora': '19:00',
             'lugar': 'Casa de Beto',
@@ -186,6 +188,115 @@ class AislamientoPorOrganizadorTests(APITestCase):
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Evento.objects.get(id=res.data['id']).organizador, self.beto)
+
+
+class ClienteYContactoTests(APITestCase):
+    """El cliente y su contacto son campos separados y los dos obligatorios."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.datos = {
+            'titulo': 'Boda Ana y Luis',
+            'tipo': 'boda',
+            'cliente': 'Ana Pérez',
+            'contacto': '300 123 4567',
+            'fecha': (date.today() + timedelta(days=30)).isoformat(),
+            'hora': '18:00',
+            'lugar': 'Salón Los Robles',
+        }
+
+    def test_crea_el_evento_con_cliente_y_contacto_por_separado(self):
+        res = self.client.post('/api/eventos/', self.datos)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['cliente'], 'Ana Pérez')
+        self.assertEqual(res.data['contacto'], '300 123 4567')
+
+    def test_sin_cliente_o_sin_contacto_no_se_crea(self):
+        casos = [
+            ('cliente', 'El cliente es obligatorio.'),
+            ('contacto', 'El contacto del cliente es obligatorio.'),
+        ]
+        for campo, mensaje in casos:
+            for datos in [{**self.datos, campo: ''}, {k: v for k, v in self.datos.items() if k != campo}]:
+                with self.subTest(campo=campo, enviado=campo in datos):
+                    res = self.client.post('/api/eventos/', datos)
+
+                    self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                    self.assertEqual(res.data[campo], [mensaje])
+        self.assertFalse(Evento.objects.exists())
+
+    def test_al_editar_no_se_puede_dejar_el_contacto_vacio(self):
+        evento = crear_evento(self.ana)
+
+        res = self.client.patch(f'/api/eventos/{evento.id}/', {'contacto': ''})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        evento.refresh_from_db()
+        self.assertEqual(evento.contacto, '300 123 4567')
+
+
+class TipoOtroTests(APITestCase):
+    """Con el tipo "otro" el organizador escribe cuál es (`tipo_otro`)."""
+
+    def setUp(self):
+        self.ana = User.objects.create_user(username='ana', password='clave-ana-123')
+        self.client.force_authenticate(self.ana)
+        self.datos = {
+            'titulo': 'Grado de Luis',
+            'tipo': 'otro',
+            'tipo_otro': 'Graduación',
+            'cliente': 'Luis Gómez',
+            'contacto': '300 123 4567',
+            'fecha': (date.today() + timedelta(days=30)).isoformat(),
+            'hora': '18:00',
+            'lugar': 'Auditorio central',
+        }
+
+    def test_con_tipo_otro_guarda_cual_es(self):
+        res = self.client.post('/api/eventos/', self.datos)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['tipo'], 'otro')
+        self.assertEqual(res.data['tipo_otro'], 'Graduación')
+
+    def test_con_tipo_otro_es_obligatorio_escribir_cual(self):
+        sin_campo = {k: v for k, v in self.datos.items() if k != 'tipo_otro'}
+        for datos in [{**self.datos, 'tipo_otro': ''}, {**self.datos, 'tipo_otro': '   '}, sin_campo]:
+            with self.subTest(tipo_otro=datos.get('tipo_otro')):
+                res = self.client.post('/api/eventos/', datos)
+
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(res.data['tipo_otro'], ['Escribe qué tipo de evento es.'])
+        self.assertFalse(Evento.objects.exists())
+
+    def test_no_supera_40_caracteres(self):
+        res = self.client.post('/api/eventos/', {**self.datos, 'tipo_otro': 'x' * 41})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.data['tipo_otro'], ['El tipo de evento no puede superar 40 caracteres.'])
+
+    def test_con_otro_tipo_se_guarda_vacio(self):
+        res = self.client.post('/api/eventos/', {**self.datos, 'tipo': 'boda'})
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['tipo_otro'], '')
+
+    def test_al_editar(self):
+        evento = Evento.objects.get(id=self.client.post('/api/eventos/', self.datos).data['id'])
+        url = f'/api/eventos/{evento.id}/'
+
+        # Cambiar otro dato no exige reescribirlo; dejarlo vacío no se permite.
+        self.assertEqual(self.client.patch(url, {'titulo': 'Grado de Luis G.'}).status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.patch(url, {'tipo_otro': ''}).status_code, status.HTTP_400_BAD_REQUEST)
+        evento.refresh_from_db()
+        self.assertEqual(evento.tipo_otro, 'Graduación')
+
+        # Al pasar a otro tipo se borra.
+        self.assertEqual(self.client.patch(url, {'tipo': 'social'}).status_code, status.HTTP_200_OK)
+        evento.refresh_from_db()
+        self.assertEqual(evento.tipo_otro, '')
 
 
 class VistaHoyTests(APITestCase):

@@ -114,6 +114,10 @@ PATCH  /api/eventos/{id}/
 DELETE /api/eventos/{id}/
 ```
 
+Campos obligatorios: `titulo`, `tipo`, `cliente` (quién contrató el evento), `contacto` (teléfono o correo del cliente), `fecha`, `hora` y `lugar`. Si falta alguno o llega vacío, no se guarda y responde `400` con `{ campo: ["mensaje"] }`, ej. `{ "contacto": ["El contacto del cliente es obligatorio."] }`. Los eventos creados antes de separar el contacto del cliente lo tienen vacío; al editarlos hay que completarlo.
+
+Con `tipo: "otro"` también es obligatorio `tipo_otro`, el tipo que escribe el organizador (ej. `"Graduación"`, hasta 40 caracteres); si falta: `{ "tipo_otro": ["Escribe qué tipo de evento es."] }`. Con cualquier otro tipo se guarda vacío. Al editar con `PATCH` solo se revisa si llega `tipo` o `tipo_otro`.
+
 ### Gestiones logísticas
 
 ```text

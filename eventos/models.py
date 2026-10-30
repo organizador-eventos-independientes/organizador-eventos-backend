@@ -18,7 +18,12 @@ class Evento(models.Model):
     titulo = models.CharField(max_length=200)
     descripcion = models.TextField(blank=True, default='')
     tipo = models.CharField(max_length=100, default='')
+    # Con el tipo "otro", cuál es (ej. "Graduación"); vacío con los demás.
+    tipo_otro = models.CharField(max_length=40, blank=True, default='')
     cliente = models.CharField(max_length=200, default='')
+    # Cómo comunicarse con el cliente (teléfono o correo). Los eventos creados
+    # antes de separarlo del cliente lo tienen vacío.
+    contacto = models.CharField(max_length=200, default='')
     fecha = models.DateField()
     hora = models.TimeField()
     lugar = models.CharField(max_length=200)
